@@ -1,0 +1,10 @@
+<div id="mangaReaderConfig" data-role="page" class="page type-interior pluginConfigurationPage">
+  <div data-role="content"><div class="content-primary">
+    <h1>Manga Reader</h1>
+    <p>Read CBZ and ZIP manga from your Books libraries. Each Jellyfin account keeps its own reading progress on the server.</p>
+    <p><a id="mangaReaderLink" class="button-link" target="_blank" rel="noopener">Open Manga Reader</a></p>
+    <p>Share the reader link with your users. They sign in with their own Jellyfin accounts. Optionally add the link to Jellyfin Web's custom menu links.</p>
+    <p>Version 0.1 supports CBZ/ZIP containing JPEG, PNG, WebP, GIF, or AVIF images. CBR, PDF, EPUB, and native TV clients are not supported in this release.</p>
+  </div></div>
+  <script>document.querySelector('#mangaReaderLink').href = ApiClient.getUrl('MangaReader/reader');</script>
+</div>
