@@ -11,25 +11,55 @@ namespace Jellyfin.Plugin.MangaReader;
 public sealed class ReaderController(ILibraryManager library, IUserManager users, ProgressStore progress, ArchiveReader archives) : ControllerBase
 {
     private Guid UserId => Guid.TryParse(User.FindFirst("Jellyfin-UserId")?.Value, out var id) ? id : Guid.Empty;
+    private static readonly object ConfigurationLock = new();
+    private static Guid[] MangaLibraryIds => (Plugin.Instance?.Configuration.MangaLibraryIds ?? [])
+        .Append(Plugin.Instance?.Configuration.MangaLibraryId ?? Guid.Empty).Where(id => id != Guid.Empty).Distinct().ToArray();
+
+    [Authorize(Policy = MediaBrowser.Common.Api.Policies.RequiresElevation)]
+    [HttpPost("libraries/{id:guid}")]
+    public IActionResult RegisterLibrary(Guid id)
+    {
+        if (!library.GetVirtualFolders().Any(f => Guid.TryParse(f.ItemId, out var folderId) && folderId == id &&
+            string.Equals(f.CollectionType?.ToString(), "books", StringComparison.OrdinalIgnoreCase)))
+            return BadRequest("Choose an existing Books library.");
+        lock (ConfigurationLock)
+        {
+            var plugin = Plugin.Instance!;
+            plugin.Configuration.MangaLibraryIds = MangaLibraryIds.Append(id).Distinct().ToArray();
+            plugin.SaveConfiguration();
+        }
+        return NoContent();
+    }
+
+    [HttpGet("bootstrap")]
+    public IActionResult Bootstrap()
+    {
+        if (UserId == Guid.Empty) return Unauthorized();
+        var user = users.GetUserById(UserId);
+        if (user is null) return Unauthorized();
+        var items = MangaLibraryIds.Select(id => library.GetItemById<BaseItem>(id, user)).Where(item => item is not null && item.IsVisible(user));
+        return Ok(new { libraries = items.Select(item => new { id = item!.Id, name = item.Name }), enabled = Plugin.Instance?.Configuration.EnableInAppReader == true });
+    }
 
     [HttpGet("library")]
-    public IActionResult Library([FromQuery] int start = 0)
+    public IActionResult Library([FromQuery] int start = 0, [FromQuery] Guid libraryId = default)
     {
         if (UserId == Guid.Empty) return Unauthorized();
         var user = users.GetUserById(UserId);
         if (user is null) return Unauthorized();
         if (start < 0) return BadRequest();
+        if (libraryId != Guid.Empty && (!MangaLibraryIds.Contains(libraryId) || library.GetItemById<BaseItem>(libraryId, user) is null)) return NotFound();
         var items = library.GetItemList(new InternalItemsQuery(user)
         {
             IncludeItemTypes = [Jellyfin.Data.Enums.BaseItemKind.Book],
-            Recursive = true, StartIndex = start, Limit = 100,
+            Recursive = true, ParentId = libraryId, StartIndex = start, Limit = 100,
             OrderBy = [(Jellyfin.Data.Enums.ItemSortBy.SortName, Jellyfin.Database.Implementations.Enums.SortOrder.Ascending)]
         });
         return Ok(new
         {
             next = items.Count == 100 ? (int?)(start + 100) : null,
             items = items.OfType<Book>().Where(b => b.IsVisible(user) && ArchiveReader.Supports(b.Path))
-                .Select(b => new { id = b.Id, title = b.Name, progress = progress.Get(UserId, b.Id) }).ToArray()
+                .Select(b => new { id = b.Id, title = b.Name, series = string.IsNullOrWhiteSpace(b.SeriesName) ? Path.GetFileName(Path.GetDirectoryName(b.Path)) : b.SeriesName, progress = progress.Get(UserId, b.Id) }).ToArray()
         });
     }
     private Book? AccessibleBook(Guid id)
@@ -51,6 +81,9 @@ public sealed class ReaderController(ILibraryManager library, IUserManager users
     {
         "reader.js" => Asset(name, "text/javascript; charset=utf-8"),
         "reader.css" => Asset(name, "text/css; charset=utf-8"),
+        "bridge.js" => Asset(name, "text/javascript; charset=utf-8"),
+        "bridge.css" => Asset(name, "text/css; charset=utf-8"),
+        "config.js" => Asset(name, "text/javascript; charset=utf-8"),
         _ => NotFound()
     };
 

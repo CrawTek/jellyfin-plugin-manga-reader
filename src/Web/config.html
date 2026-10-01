@@ -1,10 +1,11 @@
-<div id="mangaReaderConfig" data-role="page" class="page type-interior pluginConfigurationPage">
+<div id="mangaReaderConfig" data-role="page" class="page type-interior pluginConfigurationPage" data-controller="__plugin/manga-reader-config.js">
   <div data-role="content"><div class="content-primary">
     <h1>Manga Reader</h1>
-    <p>Read CBZ and ZIP manga from your Books libraries. Each Jellyfin account keeps its own reading progress on the server.</p>
-    <p><a id="mangaReaderLink" class="button-link" target="_blank" rel="noopener">Open Manga Reader</a></p>
-    <p>Share the reader link with your users. They sign in with their own Jellyfin accounts. Optionally add the link to Jellyfin Web's custom menu links.</p>
-    <p>Version 0.1 supports CBZ/ZIP containing JPEG, PNG, WebP, GIF, or AVIF images. CBR, PDF, EPUB, and native TV clients are not supported in this release.</p>
+    <p>To add manga, open Dashboard → Libraries → Add Media Library, choose Manga, and select its folder using Jellyfin’s folder picker.</p>
+    <p>Manga uses Jellyfin’s Books library type internally. Select its library tile in Jellyfin Web or the Android phone/tablet app to read. Each account keeps its own saved page.</p>
+    <h2>Enable an existing Books library</h2>
+    <form id="mangaLibraryForm"><label>Library <select id="mangaExistingLibrary" is="emby-select"></select></label><button type="submit" is="emby-button" class="raised button-submit">Enable Manga Reader</button></form>
+    <p id="mangaConfigStatus" role="status"></p>
+    <p>After updating the plugin, restart Jellyfin and fully close and reopen the Android app. CBZ/ZIP supported; CBR, PDF, loose image folders and TV apps are not supported.</p>
   </div></div>
-  <script>document.querySelector('#mangaReaderLink').href = ApiClient.getUrl('MangaReader/reader');</script>
 </div>

@@ -1,0 +1,22 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body>
+<h1>Jellyfin integration fixture</h1>
+<div class="dlg-librarycreator dialog"><form class="addLibraryForm">
+<label>Content type<select id="selectCollectionType"><option value="">Choose</option><option value="books">Books</option><option value="movies">Movies</option></select></label>
+<label>Name<input id="txtValue" required></label><button type="button" class="btnAddFolder">Add folder</button><div class="folderList"></div><button type="submit">Create library</button>
+</form></div>
+<a id="mangaTile" data-id="11111111111111111111111111111111" href="#!/list?parentId=11111111111111111111111111111111">My Manga</a>
+<a id="booksTile" href="#!/list?parentId=22222222222222222222222222222222">Ordinary Books</a>
+<script>
+window.testCalls=[];window.testToken='test-token';window.nativeBackCount=0;
+window.NavigationHelper={goBack(){window.nativeBackCount++;}};
+window.ApiClient={
+ accessToken:()=>window.testToken,getCurrentUserId:()=> 'reader',serverAddress:()=>location.origin+'/jellyfin',
+ async addVirtualFolder(name,type,refresh,options){ window.testCalls.push({name,type,refresh,options}); },
+ async getVirtualFolders(){ return [{Name:document.querySelector('#txtValue').value,CollectionType:'books',ItemId:'11111111111111111111111111111111'}]; }
+};
+// Public DOM/API boundaries from Jellyfin's mediaLibraryCreator; directory browsing is mocked.
+const select=document.querySelector('#selectCollectionType');let paths=[];
+select.addEventListener('change',()=>document.querySelector('#txtValue').value=select.selectedOptions[0].textContent);
+document.querySelector('.btnAddFolder').onclick=()=>{paths=[{Path:'/media/manga'}];document.querySelector('.folderList').textContent='/media/manga';};
+document.querySelector('form').onsubmit=async e=>{e.preventDefault();if(!paths.length)return;await ApiClient.addVirtualFolder(document.querySelector('#txtValue').value,select.value,true,{PathInfos:paths});document.body.dataset.created=String(window.testCalls.length);};
+</script><script defer src="/jellyfin/MangaReader/assets/bridge.js"></script></body></html>

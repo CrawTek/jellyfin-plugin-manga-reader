@@ -6,19 +6,22 @@ const http = require('node:http');
 
 (async () => {
  const web = path.resolve(__dirname, '../src/Web');
- let progress = null, revision = 0, failSave = false, conflict = false;
+ let progress = null, revision = 0, failSave = false, conflict = false, registered = false, failRegistration = false;
  const server = http.createServer(async (req,res) => {
   const url = new URL(req.url, 'http://localhost');
   const send = (data, status=200) => { res.writeHead(status, {'Content-Type':'application/json'});res.end(JSON.stringify(data)); };
   const relative = url.pathname.replace('/jellyfin/', '');
+  if(relative==='web/index.html') { res.writeHead(200,{'Content-Type':'text/html'});return res.end(fs.readFileSync(path.join(__dirname,'shell.html'))); }
   if(url.pathname.endsWith('/favicon.ico')) { res.writeHead(204); return res.end(); }
   if(relative==='MangaReader/reader' || relative.startsWith('MangaReader/assets/')) {
    const name = relative==='MangaReader/reader' ? 'index.html' : relative.split('/').pop();
-   if(!['index.html','reader.js','reader.css'].includes(name)) return send({},404);
+   if(!['index.html','reader.js','reader.css','bridge.js','bridge.css','config.js'].includes(name)) return send({},404);
    res.writeHead(200,{'Content-Type':name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html'}); return res.end(fs.readFileSync(path.join(web,name)));
   }
   if(relative==='Users/AuthenticateByName') return send({AccessToken:'test-token'});
-  assert.match(req.headers.authorization || '', /Token="test-token"/);
+  assert.ok(req.headers['x-emby-token']==='test-token' || /Token="test-token"/.test(req.headers.authorization || ''));
+  if(relative==='MangaReader/bootstrap') return send({enabled:true,libraries:registered?[{id:'11111111111111111111111111111111',name:'My Manga'}]:[]});
+  if(relative.startsWith('MangaReader/libraries/')) { if(failRegistration)return send({},500);registered=true;return send({}); }
   if(relative==='MangaReader/library') return send({next:null,items:[{id:'book',title:'The Paper Moon — Volume 1',progress}]});
   if(relative==='MangaReader/books/book') return send({id:'book',title:'The Paper Moon — Volume 1',total:3,progress});
   if(relative.includes('/pages/')) {
@@ -60,5 +63,44 @@ const http = require('node:http');
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   assert.deepEqual(errors,[]);
   console.log('PASS browser: login, base path, RTL/LTR, turn pages, reload/resume, failed save/retry, conflict/reopen, mobile width, no script errors');
+  const shell=await browser.newPage({viewport:{width:390,height:844}});
+  shell.on('pageerror',e=>errors.push(e.message));
+  await shell.goto(`http://127.0.0.1:${server.address().port}/jellyfin/web/index.html`);
+  await shell.locator('#selectCollectionType').selectOption({label:'Books'});
+  await shell.locator('.btnAddFolder').click();await shell.locator('button[type=submit]').click();
+  await shell.waitForFunction(()=>document.body.dataset.created==='1');assert.equal(registered,false);
+  await shell.locator('#selectCollectionType').selectOption({label:'Manga'});
+  assert.equal(await shell.locator('#txtValue').inputValue(),'Manga');
+  await shell.locator('#txtValue').fill('My Manga');
+  await shell.locator('button[type=submit]').click();
+  await shell.waitForFunction(()=>document.body.dataset.created==='2');assert.equal(registered,true);
+  const created=await shell.evaluate(()=>window.testCalls[1]);
+  assert.equal(created.type,'books');assert.equal(created.name,'My Manga');assert.deepEqual(created.options.PathInfos,[{Path:'/media/manga'}]);
+  await shell.locator('#mangaTile').click();
+  const reader=shell.frameLocator('#manga-reader-overlay iframe');
+  await reader.locator('#books .book').click();await reader.getByText('Place saved ✓',{exact:true}).waitFor();
+  assert.equal(await reader.locator('#pageNumber').inputValue(),'2');
+  assert.equal(await reader.locator('#logout').isVisible(),false);
+  assert.equal(await reader.locator('#login').isVisible(),false);
+  assert.equal(browser.contexts().flatMap(c=>c.pages()).length,2);
+  failSave=true;await reader.locator('#next').click();await reader.getByText('Not saved — click to retry',{exact:true}).waitFor();
+  await shell.evaluate(()=>NavigationHelper.goBack());
+  await reader.getByText('Your page is still loading or has not been saved. Retry saving before leaving.',{exact:true}).waitFor();
+  assert.equal(await shell.locator('#manga-reader-overlay').count(),1);
+  failSave=false;await reader.locator('#saved').click();await reader.getByText('Place saved ✓',{exact:true}).waitFor();
+  await shell.screenshot({path:path.resolve(__dirname,'../test-results/in-app-reader-mobile.png'),fullPage:true});
+  await shell.evaluate(()=>NavigationHelper.goBack());await shell.locator('#manga-reader-overlay').waitFor({state:'detached'});
+  assert.equal(await shell.evaluate(()=>window.nativeBackCount),0);
+  await shell.locator('#mangaTile').click();await reader.locator('#continue .book').click();await reader.getByText('Place saved ✓',{exact:true}).waitFor();
+  assert.equal(await reader.locator('#pageNumber').inputValue(),'3');
+  await shell.evaluate(()=>window.testToken='');await shell.locator('#manga-reader-overlay').waitFor({state:'detached'});
+  await shell.evaluate(()=>window.testToken='test-token');
+  await shell.waitForTimeout(2200);
+  failRegistration=true;
+  const dialog=shell.waitForEvent('dialog');await shell.locator('button[type=submit]').click();
+  const warning=await dialog;assert.match(warning.message(),/library was created.*Do not create it again/);await warning.accept();
+  await shell.waitForFunction(()=>document.body.dataset.created==='3');
+  assert.deepEqual(errors,[]);
+  console.log('PASS integration: ordinary Books unchanged, Manga preset/native folder arguments, library registration, same-window session handoff, resume, failed-save back guard, Android navigation hook, account logout, registration recovery warning');
  } finally { await browser.close();server.close(); }
 })().catch(e=>{console.error(e);process.exit(1);});

@@ -2,13 +2,15 @@
 const $ = id => document.getElementById(id);
 const root = new URL('../', location.href);
 const key = 'manga-reader:' + root.pathname;
+const embedded = new URLSearchParams(location.search).get('embedded') === '1' && parent !== window;
+const libraryId = new URLSearchParams(location.search).get('libraryId') || '';
 let auth;
-try { auth = JSON.parse(sessionStorage.getItem(key) || 'null'); } catch { auth = null; }
+try { auth = embedded ? null : JSON.parse(sessionStorage.getItem(key) || 'null'); } catch { auth = null; }
 let library = [], cursor = 0, current = null, pageUrl = null, loading = false;
 let saveChain = Promise.resolve(), unsaved = false, pendingSaves = 0;
 let device = localStorage.getItem('manga-reader-device');
 if (!device) { device = Array.from(crypto.getRandomValues(new Uint8Array(16)), v => v.toString(16).padStart(2,'0')).join(''); localStorage.setItem('manga-reader-device', device); }
-const authHeader = () => `MediaBrowser Client="Manga Reader", Device="Browser", DeviceId="${device}", Version="0.1.0"${auth ? `, Token="${auth.token}"` : ''}`;
+const authHeader = () => `MediaBrowser Client="Manga Reader", Device="Browser", DeviceId="${device}", Version="0.2.0"${auth ? `, Token="${auth.token}"` : ''}`;
 function message(text = '') { $('status').textContent = text; $('status').hidden = !text; }
 async function request(path, options = {}) {
     const response = await fetch(new URL(path, root), { ...options, headers: { Authorization: authHeader(), ...options.headers } });
@@ -20,7 +22,7 @@ async function request(path, options = {}) {
     return response;
 }
 async function json(path, options) { return (await request(path, options)).json(); }
-function view(name) { for (const id of ['login', 'library', 'reader']) $(id).hidden = id !== name; $('logout').hidden = !auth; message(); }
+function view(name) { for (const id of ['login', 'library', 'reader']) $(id).hidden = id !== name; $('logout').hidden = embedded || !auth; message(); }
 function card(book) {
     const button = document.createElement('button'); button.className = 'book';
     const icon = document.createElement('span'); icon.className = 'book-icon'; icon.textContent = '▤';
@@ -43,7 +45,7 @@ async function loadLibrary(reset = false) {
     $('more').disabled = true;
     try {
         do {
-            const data = await json(`MangaReader/library?start=${cursor}`);
+            const data = await json(`MangaReader/library?start=${cursor}&libraryId=${encodeURIComponent(libraryId)}`);
             library.push(...data.items); cursor = data.next;
         } while (cursor !== null && library.length === 0);
         renderLibrary();
@@ -123,4 +125,20 @@ let touch;
 $('stage').addEventListener('touchstart', e => { if(e.touches.length === 1) touch = [e.touches[0].clientX,e.touches[0].clientY]; else touch = null; }, {passive:true});
 $('stage').addEventListener('touchend', e => { if (!touch || !current) return; const dx = e.changedTouches[0].clientX-touch[0], dy=e.changedTouches[0].clientY-touch[1]; touch=null; if (Math.abs(dx)>65 && Math.abs(dx)>Math.abs(dy)*1.5) showPage(current.page + ((dx>0) === ($('direction').value==='rtl') ? 1 : -1)); }, {passive:true});
 window.addEventListener('beforeunload', e => { if(unsaved || pendingSaves) { e.preventDefault(); e.returnValue=''; } });
-if(auth) { view('library'); loadLibrary(true).catch(e => message(e.message)); } else view('login');
+if (embedded) {
+    document.querySelector('header').hidden = true;
+    view('waiting'); message('Opening your Jellyfin library…');
+    window.addEventListener('message', async e => {
+        if (e.source !== parent || e.origin !== location.origin) return;
+        if (e.data?.type === 'manga-session' && typeof e.data.token === 'string' && !auth) {
+            auth = {token:e.data.token}; view('library');
+            loadLibrary(true).catch(error => message(error.message));
+        } else if (e.data?.type === 'manga-close-request') {
+            await saveChain;
+            if (loading || unsaved || pendingSaves) { message('Your page is still loading or has not been saved. Retry saving before leaving.'); return; }
+            parent.postMessage({type:'manga-close-ok'}, location.origin);
+        }
+    });
+    parent.postMessage({type:'manga-ready'}, location.origin);
+} else if(auth) { view('library'); loadLibrary(true).catch(e => message(e.message)); } else view('login');
+
