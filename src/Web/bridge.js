@@ -53,7 +53,7 @@
             if (url.origin !== root.origin) return false;
             const query = url.hash.includes('?') ? url.hash.split('?')[1] : url.search;
             const params = new URLSearchParams(query);
-            return ['parentId', 'id', 'itemId'].some(key => normalize(params.get(key)) === libraryId);
+            return ['topParentId', 'parentId', 'id', 'itemId'].some(key => normalize(params.get(key)) === libraryId);
         } catch { return false; }
     }
     document.addEventListener('click', e => {

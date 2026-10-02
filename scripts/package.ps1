@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory=$true)][ValidatePattern('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')][string]$Repository,
-    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.2.0',
+    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.2.1',
     [string]$Dotnet = 'dotnet'
 )
 $ErrorActionPreference = 'Stop'
@@ -25,4 +25,5 @@ $manifest = @(@{
 })
 ConvertTo-Json -InputObject $manifest -Depth 8 | Set-Content -LiteralPath (Join-Path $output 'manifest.json') -Encoding utf8NoBOM
 Write-Output "Created $zipPath and artifacts/manifest.json"
+
 
