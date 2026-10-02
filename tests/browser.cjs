@@ -19,7 +19,8 @@ const http = require('node:http');
    res.writeHead(200,{'Content-Type':name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html'}); return res.end(fs.readFileSync(path.join(web,name)));
   }
   if(relative==='Users/AuthenticateByName') return send({AccessToken:'test-token'});
-  assert.ok(req.headers['x-emby-token']==='test-token' || /Token="test-token"/.test(req.headers.authorization || ''));
+  // Jellyfin 12 may disable legacy X-Emby-Token authentication.
+  assert.match(req.headers.authorization || '', /Token="test-token"/);
   if(relative==='MangaReader/bootstrap') return send({enabled:true,libraries:registered?[{id:'11111111111111111111111111111111',name:'My Manga'}]:[]});
   if(relative.startsWith('MangaReader/libraries/')) { if(failRegistration)return send({},500);registered=true;return send({}); }
   if(relative==='MangaReader/library') return send({next:null,items:[{id:'book',title:'The Paper Moon — Volume 1',progress}]});

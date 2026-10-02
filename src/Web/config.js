@@ -14,10 +14,11 @@ export default function(view) {
         e.preventDefault(); if (!select.value) return;
         const button = e.target.querySelector('button'); button.disabled = true;
         try {
-            const result = await fetch(ApiClient.getUrl('MangaReader/libraries/' + encodeURIComponent(select.value)), {method:'POST',headers:{'X-Emby-Token':ApiClient.accessToken()}});
-            if (!result.ok) throw new Error();
+            const result = await fetch(ApiClient.getUrl('MangaReader/libraries/' + encodeURIComponent(select.value)), {method:'POST',headers:{Authorization:'MediaBrowser Token=' + JSON.stringify(ApiClient.accessToken())}});
+            if (!result.ok) throw new Error(`Server returned ${result.status}.`);
             status.textContent = 'Enabled. Reload Jellyfin or reopen the Android app, then select this library on the home screen.';
-        } catch { status.textContent = 'Could not enable this library. Check your administrator session and try again.'; }
+        } catch (error) { status.textContent = 'Could not enable this library. ' + error.message + ' Check your administrator session and try again.'; }
         finally { button.disabled = false; }
     });
 }
+

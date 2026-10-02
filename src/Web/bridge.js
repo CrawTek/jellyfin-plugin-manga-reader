@@ -79,7 +79,7 @@
                         const folders = await api.getVirtualFolders();
                         const candidates = folders.filter(folder => folder.Name === name && String(folder.CollectionType).toLowerCase() === 'books');
                         if (candidates.length !== 1) throw new Error('Could not identify the new library.');
-                        const response = await fetch(new URL('MangaReader/libraries/' + encodeURIComponent(candidates[0].ItemId), root), {method:'POST',headers:{'X-Emby-Token':api.accessToken()}});
+                        const response = await fetch(new URL('MangaReader/libraries/' + encodeURIComponent(candidates[0].ItemId), root), {method:'POST',headers:{Authorization:'MediaBrowser Token=' + JSON.stringify(api.accessToken())}});
                         if (!response.ok) throw new Error('Could not enable the manga reader.');
                         identity = ''; await refresh();
                     } catch {
@@ -111,7 +111,7 @@
         if (!api) return;
         pending = true;
         try {
-            const response = await fetch(new URL('MangaReader/bootstrap', root), {headers:{'X-Emby-Token':api.accessToken()}});
+            const response = await fetch(new URL('MangaReader/bootstrap', root), {headers:{Authorization:'MediaBrowser Token=' + JSON.stringify(api.accessToken())}});
             if (!response.ok) throw new Error('Manga integration unavailable');
             const data = await response.json();
             if (identity === next && data.enabled) libraries = data.libraries || [];
@@ -120,3 +120,4 @@
     }
     refresh(); setInterval(refresh, 2000);
 })();
+

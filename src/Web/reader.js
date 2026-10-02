@@ -10,7 +10,7 @@ let library = [], cursor = 0, current = null, pageUrl = null, loading = false;
 let saveChain = Promise.resolve(), unsaved = false, pendingSaves = 0;
 let device = localStorage.getItem('manga-reader-device');
 if (!device) { device = Array.from(crypto.getRandomValues(new Uint8Array(16)), v => v.toString(16).padStart(2,'0')).join(''); localStorage.setItem('manga-reader-device', device); }
-const authHeader = () => `MediaBrowser Client="Manga Reader", Device="Browser", DeviceId="${device}", Version="0.2.1"${auth ? `, Token="${auth.token}"` : ''}`;
+const authHeader = () => embedded ? 'MediaBrowser Token=' + JSON.stringify(auth?.token || '') : `MediaBrowser Client="Manga Reader", Device="Browser", DeviceId="${device}", Version="0.2.2"${auth ? `, Token="${auth.token}"` : ''}`;
 function message(text = '') { $('status').textContent = text; $('status').hidden = !text; }
 async function request(path, options = {}) {
     const response = await fetch(new URL(path, root), { ...options, headers: { Authorization: authHeader(), ...options.headers } });
@@ -141,5 +141,6 @@ if (embedded) {
     });
     parent.postMessage({type:'manga-ready'}, location.origin);
 } else if(auth) { view('library'); loadLibrary(true).catch(e => message(e.message)); } else view('login');
+
 
 
