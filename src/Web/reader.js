@@ -10,7 +10,7 @@ let library = [], cursor = 0, current = null, pageUrl = null, loading = false;
 let saveChain = Promise.resolve(), unsaved = false, pendingSaves = 0;
 let device = localStorage.getItem('manga-reader-device');
 if (!device) { device = Array.from(crypto.getRandomValues(new Uint8Array(16)), v => v.toString(16).padStart(2,'0')).join(''); localStorage.setItem('manga-reader-device', device); }
-const authHeader = () => embedded ? 'MediaBrowser Token=' + JSON.stringify(auth?.token || '') : `MediaBrowser Client="Manga Reader", Device="Browser", DeviceId="${device}", Version="0.2.2"${auth ? `, Token="${auth.token}"` : ''}`;
+const authHeader = () => embedded ? 'MediaBrowser Token=' + JSON.stringify(auth?.token || '') : `MediaBrowser Client="Manga Reader", Device="Browser", DeviceId="${device}", Version="0.2.3"${auth ? `, Token="${auth.token}"` : ''}`;
 function message(text = '') { $('status').textContent = text; $('status').hidden = !text; }
 async function request(path, options = {}) {
     const response = await fetch(new URL(path, root), { ...options, headers: { Authorization: authHeader(), ...options.headers } });
@@ -46,7 +46,7 @@ async function loadLibrary(reset = false) {
     try {
         do {
             const data = await json(`MangaReader/library?start=${cursor}&libraryId=${encodeURIComponent(libraryId)}`);
-            library.push(...data.items); cursor = data.next;
+            library.push(...data.items); cursor = data.next ?? null;
         } while (cursor !== null && library.length === 0);
         renderLibrary();
     } finally { $('more').disabled = false; }
@@ -141,6 +141,7 @@ if (embedded) {
     });
     parent.postMessage({type:'manga-ready'}, location.origin);
 } else if(auth) { view('library'); loadLibrary(true).catch(e => message(e.message)); } else view('login');
+
 
 
 

@@ -4,6 +4,8 @@ Read local CBZ/ZIP manga inside Jellyfin Web and the Android **phone/tablet** ap
 
 **v0.2 preview · Jellyfin 12.1 · .NET 10**
 
+Live Jellyfin 12.1 checks verified the Manga selector, folder selection, library creation, existing-library registration, embedded reading, page turning and saved-page resume. Physical Android-device testing is still pending.
+
 ## Install and add a library
 
 1. In **Dashboard → Plugins → Repositories**, add `https://github.com/CrawTek/jellyfin-plugin-manga-reader/releases/latest/download/manifest.json`.
@@ -55,7 +57,7 @@ dotnet run --project tests/CoreTests.csproj -c Release
 dotnet run --project middleware-tests/MiddlewareTests.csproj -c Release
 npm install
 npm test
-./scripts/package.ps1 -Repository 'CrawTek/jellyfin-plugin-manga-reader' -Version '0.2.2'
+./scripts/package.ps1 -Repository 'CrawTek/jellyfin-plugin-manga-reader' -Version '0.2.3'
 ```
 
 The core tests cover archive limits, ordering, progress persistence, user isolation and conflicts. Middleware tests use an actual local ASP.NET server with static files and compression. Browser tests use a mock Jellyfin API and a fixture of the library-creation interface; they check Manga registration, normal Books behavior, folder arguments, embedded login, resume, failed saves, Android navigation and logout. Set `BROWSER_CHANNEL=chrome` to use Chrome instead of Edge.
@@ -76,5 +78,6 @@ Reader assets are public; manga and progress require a user login. Server API ke
 ## License
 
 GNU GPL version 2. See [LICENSE](LICENSE).
+
 
 

@@ -6,7 +6,7 @@ const http = require('node:http');
 
 (async () => {
  const web = path.resolve(__dirname, '../src/Web');
- let progress = null, revision = 0, failSave = false, conflict = false, registered = false, failRegistration = false;
+ let progress = null, revision = 0, failSave = false, conflict = false, registered = false, failRegistration = false, emptyLibrary = false;
  const server = http.createServer(async (req,res) => {
   const url = new URL(req.url, 'http://localhost');
   const send = (data, status=200) => { res.writeHead(status, {'Content-Type':'application/json'});res.end(JSON.stringify(data)); };
@@ -23,7 +23,8 @@ const http = require('node:http');
   assert.match(req.headers.authorization || '', /Token="test-token"/);
   if(relative==='MangaReader/bootstrap') return send({enabled:true,libraries:registered?[{id:'11111111111111111111111111111111',name:'My Manga'}]:[]});
   if(relative.startsWith('MangaReader/libraries/')) { if(failRegistration)return send({},500);registered=true;return send({}); }
-  if(relative==='MangaReader/library') return send({next:null,items:[{id:'book',title:'The Paper Moon — Volume 1',progress}]});
+  // Match Jellyfin's omission of null properties on the last page.
+  if(relative==='MangaReader/library') return send({items:emptyLibrary?[]:[{id:'book',title:'The Paper Moon — Volume 1',progress}]});
   if(relative==='MangaReader/books/book') return send({id:'book',title:'The Paper Moon — Volume 1',total:3,progress});
   if(relative.includes('/pages/')) {
    const number = Number(relative.split('/').pop());
@@ -46,6 +47,7 @@ const http = require('node:http');
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.goto(`http://127.0.0.1:${server.address().port}/jellyfin/MangaReader/reader`);
   await page.locator('#username').fill('reader');await page.locator('#password').fill('test');await page.locator('button[type=submit]').click();
+  await page.locator('#books .book').waitFor();assert.equal(await page.locator('#more').isVisible(),false);
   await page.locator('#books .book').click();await page.getByText('Place saved ✓',{exact:true}).waitFor();
   assert.equal(progress.Page,1);
   await page.locator('#stage').focus();await page.keyboard.press('ArrowLeft');await page.waitForFunction(()=>document.querySelector('#pageNumber').value==='2' && document.querySelector('#saved').textContent==='Place saved ✓');
@@ -101,6 +103,8 @@ const http = require('node:http');
   const dialog=shell.waitForEvent('dialog');await shell.locator('button[type=submit]').click();
   const warning=await dialog;assert.match(warning.message(),/library was created.*Do not create it again/);await warning.accept();
   await shell.waitForFunction(()=>document.body.dataset.created==='3');
+  emptyLibrary=true;await page.reload();await page.locator('#empty').waitFor();
+  assert.equal(await page.locator('#more').isVisible(),false);assert.equal(await page.locator('#status').isVisible(),false);
   assert.deepEqual(errors,[]);
   console.log('PASS integration: ordinary Books unchanged, Manga preset/native folder arguments, library registration, same-window session handoff, resume, failed-save back guard, Android navigation hook, account logout, registration recovery warning');
  } finally { await browser.close();server.close(); }
