@@ -1,4 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>
-  <ItemGroup><Compile Include="../src/ArchiveReader.cs" Link="ArchiveReader.cs"/><Compile Include="../src/ProgressStore.cs" Link="ProgressStore.cs"/><Compile Include="../src/MangaMetadata.cs" Link="MangaMetadata.cs"/></ItemGroup>
+  <ItemGroup><Compile Include="../src/ArchiveReader.cs" Link="ArchiveReader.cs"/><Compile Include="../src/ProgressStore.cs" Link="ProgressStore.cs"/><Compile Include="../src/MangaMetadata.cs" Link="MangaMetadata.cs"/><Compile Include="../src/MangaFolder.cs" Link="MangaFolder.cs"/></ItemGroup>
+  <ItemGroup><Compile Include="../src/MangaIdentityFile.cs" Link="MangaIdentityFile.cs"/><Compile Include="../src/MangaFolderStorage.cs" Link="MangaFolderStorage.cs"/></ItemGroup>
 </Project>

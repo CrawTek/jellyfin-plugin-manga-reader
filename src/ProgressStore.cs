@@ -24,6 +24,34 @@ public sealed class ProgressStore
         }
     }
 
+    // Retain the original records for rollback; never replace progress at a destination.
+    public void CopyForRename(IReadOnlyDictionary<Guid, Guid> books, Action move)
+    {
+        lock (gate)
+        {
+            var copies = new List<(string Source, string Target)>();
+            if (Directory.Exists(root))
+                foreach (var directory in Directory.EnumerateDirectories(root))
+                {
+                    if (!Guid.TryParseExact(Path.GetFileName(directory), "N", out var user)) continue;
+                    foreach (var pair in books.Where(p => p.Key != p.Value))
+                    {
+                        var source = FilePath(user, pair.Key); var target = FilePath(user, pair.Value);
+                        if (!File.Exists(source)) continue;
+                        if (File.Exists(target)) throw new IOException("Reading progress already exists for the destination. Choose another folder name.");
+                        copies.Add((source, target));
+                    }
+                }
+            var created = new List<string>();
+            try
+            {
+                foreach (var copy in copies) { File.Copy(copy.Source, copy.Target); created.Add(copy.Target); }
+                move();
+            }
+            catch { foreach (var path in created) File.Delete(path); throw; }
+        }
+    }
+
     public ReadingProgress Save(Guid user, Guid book, SaveProgress value, int total)
     {
         if (value.Page < 1 || value.Page > total || value.Direction is not ("rtl" or "ltr"))

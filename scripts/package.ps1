@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory=$true)][ValidatePattern('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')][string]$Repository,
-    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.4.0',
+    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.5.0',
     [string]$Dotnet = 'dotnet'
 )
 $ErrorActionPreference = 'Stop'

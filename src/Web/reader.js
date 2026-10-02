@@ -21,8 +21,10 @@ function detailsOf(value) {
     const d = value?.Details ?? value?.details;
     if (!d) return null;
     return {id:d.Id ?? d.id, title:d.Title ?? d.title, synopsis:d.Synopsis ?? d.synopsis, score:d.Score ?? d.score,
-        genres:d.Genres ?? d.genres ?? [], status:d.Status ?? d.status, image:d.Image ?? d.image};
+        genres:d.Genres ?? d.genres ?? [], status:d.Status ?? d.status, image:d.Image ?? d.image,
+        englishTitle:d.EnglishTitle ?? d.englishTitle, notice:value.Notice ?? value.notice};
 }
+function seriesTitle(book) { const d = metadata.get(seriesKey(book)); return d?.englishTitle || d?.title || book.series || 'Manga'; }
 async function loadMetadata(book) {
     const id = seriesKey(book);
     if (metadata.has(id)) return;
@@ -43,6 +45,7 @@ async function loadMetadata(book) {
 }
 function decorateSeries(button, book) {
     const id = seriesKey(book), d = metadata.get(id);
+    button.querySelector('.book-title').textContent = seriesTitle(book);
     button.querySelector('.manga-cover')?.remove(); button.querySelector('.manga-score')?.remove();
     if (covers.has(id)) { const image = document.createElement('img'); image.className = 'manga-cover'; image.src = covers.get(id); image.alt = `${book.series} cover`; button.prepend(image); }
     if (d?.score) { const score = document.createElement('span'); score.className = 'manga-score'; score.textContent = `★ ${d.score.toFixed(2)} / 10 · MAL`; button.append(score); }
@@ -52,6 +55,9 @@ function renderDetails() {
     $('seriesDetails').hidden = !book; $('identify').hidden = !book || !canIdentify;
     if (!book) return;
     const d = metadata.get(selectedSeries);
+    $('libraryTitle').textContent = seriesTitle(book);
+    $('identityNotice').textContent = d?.notice || ''; $('identityNotice').hidden = !d?.notice;
+    $('renameFolder').hidden = !canIdentify || !d?.id;
     $('seriesSynopsis').textContent = d?.synopsis || (d?.unavailable ? d.error || 'Metadata is temporarily unavailable. Your chapters are ready to read.' : metadata.has(selectedSeries) ? 'No unique MyAnimeList match found. An administrator can identify this manga.' : 'Loading MyAnimeList information…');
     $('seriesFacts').textContent = d && !d.unavailable ? [d.score ? `★ ${d.score.toFixed(2)} / 10 · MyAnimeList` : '',d.status,...d.genres].filter(Boolean).join(' · ') : '';
     $('seriesCover').hidden = !covers.has(selectedSeries);
@@ -60,14 +66,14 @@ function renderDetails() {
 }
 let device = localStorage.getItem('manga-reader-device');
 if (!device) { device = Array.from(crypto.getRandomValues(new Uint8Array(16)), v => v.toString(16).padStart(2,'0')).join(''); localStorage.setItem('manga-reader-device', device); }
-const authHeader = () => embedded ? 'MediaBrowser Token=' + JSON.stringify(auth?.token || '') : `MediaBrowser Client="Manga Reader", Device="Browser", DeviceId="${device}", Version="0.4.0"${auth ? `, Token="${auth.token}"` : ''}`;
+const authHeader = () => embedded ? 'MediaBrowser Token=' + JSON.stringify(auth?.token || '') : `MediaBrowser Client="Manga Reader", Device="Browser", DeviceId="${device}", Version="0.5.0"${auth ? `, Token="${auth.token}"` : ''}`;
 function message(text = '') { $('status').textContent = text; $('status').hidden = !text; }
 async function request(path, options = {}) {
     const response = await fetch(new URL(path, root), { ...options, headers: { Authorization: authHeader(), ...options.headers } });
     if (!response.ok) {
         if (response.status === 401) throw new Error('Sign-in expired or incorrect. Sign out and sign in again.');
         if (response.status === 409) { const error = new Error('Your place changed in another reader. Return to the library and reopen this book.'); error.conflict = true; throw error; }
-        if (response.status === 503) {
+        if (response.status === 503 || response.status === 422) {
             let problem; try { problem = await response.json(); } catch {}
             throw new Error(problem?.detail || problem?.Detail || 'The metadata service is temporarily unavailable. Try again later; you can still read your manga.');
         }
@@ -98,13 +104,13 @@ function seriesCard(books) {
     return button;
 }
 function renderLibrary() {
-    coverObserver.disconnect(); $('identifyPanel').hidden = true;
+    coverObserver.disconnect(); $('identifyPanel').hidden = true; $('renamePanel').hidden = true;
     const query = $('search').value.toLowerCase();
     const groups = new Map();
     for (const book of library) { const id = seriesKey(book); if (!groups.has(id)) groups.set(id, []); groups.get(id).push(book); }
     const inSeries = selectedSeries !== null;
     const books = (inSeries ? groups.get(selectedSeries) || [] : library).filter(b => b.title.toLowerCase().includes(query));
-    const series = [...groups.values()].filter(group => (group[0].series || 'Manga').toLowerCase().includes(query)).sort((a,b) => (a[0].series || '').localeCompare(b[0].series || '', undefined, {numeric:true}));
+    const series = [...groups.values()].filter(group => [group[0].series, seriesTitle(group[0])].some(t => (t || '').toLowerCase().includes(query))).sort((a,b) => seriesTitle(a[0]).localeCompare(seriesTitle(b[0]), undefined, {numeric:true}));
     $('books').replaceChildren(...(inSeries ? books.sort((a,b) => a.title.localeCompare(b.title, undefined, {numeric:true})).map(card) : series.map(seriesCard)));
     $('libraryTitle').textContent = inSeries ? groups.get(selectedSeries)?.[0]?.series || 'Manga' : 'Your manga.';
     $('shelfHeading').textContent = inSeries ? 'Chapters' : 'On your shelf';
@@ -191,6 +197,31 @@ $('identify').onclick = () => {
     $('identifyQuery').value = library.find(b => seriesKey(b) === selectedSeries)?.series || '';
 };
 $('identifyCancel').onclick = () => { $('identifyPanel').hidden = true; };
+let renamePlan = null;
+$('renameFolder').onclick = () => { renamePlan = null; $('renamePanel').hidden = false; $('renameApply').hidden = true; $('renameDescription').textContent = ''; };
+$('renameCancel').onclick = () => { renamePlan = null; $('renamePanel').hidden = true; };
+$('renameMode').onchange = () => { renamePlan = null; $('renameApply').hidden = true; $('renameDescription').textContent = ''; };
+$('renamePreview').onclick = async () => {
+    const book = library.find(b => seriesKey(b) === selectedSeries); if (!book) return;
+    const selected = selectedSeries, mode = $('renameMode').value;
+    $('renameApply').hidden = true; $('renamePreview').disabled = true;
+    try {
+        const plan = await json(`MangaReader/books/${book.id}/rename-preview`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});
+        if (selected !== selectedSeries || mode !== $('renameMode').value) return;
+        renamePlan = {...plan, mode, book:book.id, selected};
+        $('renameDescription').textContent = `${plan.sourceName} → ${plan.targetName}`;
+        $('renameApply').textContent = `Rename to ${plan.targetName}`; $('renameApply').hidden = false;
+    } catch(e) { message(e.message); } finally { $('renamePreview').disabled = false; }
+};
+$('renameApply').onclick = async () => {
+    const plan = renamePlan; if (!plan || plan.selected !== selectedSeries) return;
+    $('renameApply').disabled = true;
+    try {
+        await json(`MangaReader/books/${plan.book}/rename`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:plan.mode,expectedName:plan.targetName,malId:plan.malId})});
+        renamePlan = null; library = library.filter(b => seriesKey(b) !== plan.selected); selectedSeries = null; renderLibrary();
+        message(`Folder renamed to ${plan.targetName}. Jellyfin is scanning the new location. Refresh this library after the scan finishes.`);
+    } catch(e) { message(e.message); } finally { $('renameApply').disabled = false; }
+};
 $('identifyForm').onsubmit = async e => {
     e.preventDefault(); const selected = selectedSeries, book = library.find(b => seriesKey(b) === selected);
     if (!book) return;

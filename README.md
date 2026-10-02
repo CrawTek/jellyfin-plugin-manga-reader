@@ -2,7 +2,7 @@
 
 Read local CBZ/ZIP manga inside Jellyfin Web and the Android **phone/tablet** app, with page turning and a separate saved place for every account.
 
-**v0.2 preview · Jellyfin 12.1 · .NET 10**
+**v0.5 preview · Jellyfin 12.1 · .NET 10**
 
 Live Jellyfin 12.1 checks verified the Manga selector, folder selection, library creation, existing-library registration, embedded reading, page turning and saved-page resume. Physical Android-device testing is still pending.
 
@@ -57,7 +57,7 @@ dotnet run --project tests/CoreTests.csproj -c Release
 dotnet run --project middleware-tests/MiddlewareTests.csproj -c Release
 npm install
 npm test
-./scripts/package.ps1 -Repository 'CrawTek/jellyfin-plugin-manga-reader' -Version '0.4.0'
+./scripts/package.ps1 -Repository 'CrawTek/jellyfin-plugin-manga-reader' -Version '0.5.0'
 ```
 
 The core tests cover archive limits, ordering, progress persistence, user isolation and conflicts. Middleware tests use an actual local ASP.NET server with static files and compression. Browser tests use a mock Jellyfin API and a fixture of the library-creation interface; they check Manga registration, normal Books behavior, folder arguments, embedded login, resume, failed saves, Android navigation and logout. Set `BROWSER_CHANNEL=chrome` to use Chrome instead of Edge.
@@ -87,7 +87,7 @@ Manga titles are grouped by their parent folder name. Open a title to browse its
 
 ## MyAnimeList metadata
 
-The Manga Reader title shelf displays cover posters and MyAnimeList scores. Open a title for its synopsis, publication status, genres and chapters. Folder names remain the library titles. Metadata is obtained directly from the official MyAnimeList API. In Dashboard → Plugins → Manga Reader → Settings, enter the **Client ID** from your [MyAnimeList API application](https://myanimelist.net/apiconfig), test the connection, and save it. The Client Secret is not needed. Each server owner uses their own Client ID. This does not synchronize a MyAnimeList user's reading list.
+The Manga Reader title shelf displays cover posters and MyAnimeList scores. Open a title for its synopsis, publication status, genres and chapters. The shelf prefers the official English title when available, with the MAL primary title or folder name as a fallback. Metadata is obtained directly from the official MyAnimeList API. In Dashboard → Plugins → Manga Reader → Settings, enter the **Client ID** from your [MyAnimeList API application](https://myanimelist.net/apiconfig), test the connection, and save it. The Client Secret is not needed. Each server owner uses their own Client ID. This does not synchronize a MyAnimeList user's reading list.
 
 The server sends the manga folder name to MyAnimeList when a visible title needs metadata. Only unique exact matches against primary or alternate titles are applied automatically. For a missing or incorrect match, an administrator can open the title, select **Identify manga**, search an English or Japanese name, and choose the correct entry. Other readers cannot change the shared match.
 
@@ -98,3 +98,12 @@ These cards and details appear in the plugin's in-app Web/Android reader. This r
 Identify manga also accepts a MyAnimeList manga URL or numeric manga ID. This bypasses title search, but still depends on MyAnimeList being able to return that individual entry. Provider outages are explained in the reader instead of showing a generic HTTP 503.
 
 The saved Client ID is stored in the Jellyfin plugin configuration on the server and is sent only to api.myanimelist.net in the X-MAL-CLIENT-ID request header. It is not returned to the reader, echoed into settings, or sent with cover-image requests. Administrators can save, test, replace, or remove it without restarting Jellyfin. Back up and protect server configuration as you would other application settings.
+Folder grouping and metadata are keyed by a stable hash of the physical containing directory, not Jellyfin's logical parent ID. This keeps separate series separate when Jellyfin assigns their books the same parent. Upgrading from earlier releases refreshes metadata under the new folder identities instead of reusing potentially shared matches. Existing chapter IDs and reading progress are unchanged; an ambiguous title may need identification again.
+
+## Portable manga identification and folder names
+
+After a successful match, the plugin saves `manga-reader.json` in that manga folder in a registered Manga library. It contains a format version, MAL ID, primary title and English title; no API credentials or user information. Jellyfin needs write access to the folder. The reader shows a warning if this file cannot be saved.
+
+After reinstalling Jellyfin, enable the Manga library and open it. The plugin reads this file before attempting title matching, restores the saved identity even without API access, and fetches full details and cover art by ID when the MAL Client ID is configured. Back up the file with the manga. It preserves identification, not accounts or reading progress. Invalid files produce an actionable error rather than silently guessing another manga; identifying the manga again replaces the file.
+
+Administrators can open a manga and select **Rename folder**, choose English title (with MAL ID fallback) or numeric MAL ID, preview the proposed name, then apply it. Identification alone never renames folders. The button moves the folder within its existing parent, carries its identification file, preserves existing per-user chapter progress, and requests a library scan. Close readers before applying the rename and refresh after the scan. Existing destination folders, library roots, linked directories, and conflicting destination progress are refused; folders are never merged. Renaming through another file manager does not migrate reading progress.

@@ -7,8 +7,9 @@ const http = require('node:http');
 (async () => {
  const web = path.resolve(__dirname, '../src/Web');
  let savedClientId = '';
+ let renamed = false;
  let progress = null, revision = 0, failSave = false, conflict = false, registered = false, failRegistration = false, emptyLibrary = false, groupedFixture = false, failMetadataSearch = false, metadataFixture = false, identified = false, admin = true;
- const mangaInfo = () => ({id:42,title:'The Paper Moon',score:8.25,synopsis:'An original test story about a paper moon.',genres:['Adventure'],status:'Publishing',image:'https://cdn.myanimelist.net/images/manga/test.jpg'});
+ const mangaInfo = () => ({id:42,title:'Tsuki no Kami',englishTitle:'The Paper Moon',score:8.25,synopsis:'An original test story about a paper moon.',genres:['Adventure'],status:'Publishing',image:'https://cdn.myanimelist.net/images/manga/test.jpg'});
  const server = http.createServer(async (req,res) => {
   const url = new URL(req.url, 'http://localhost');
   const send = (data, status=200) => { res.writeHead(status, {'Content-Type':'application/json'});res.end(JSON.stringify(data)); };
@@ -39,7 +40,9 @@ const http = require('node:http');
   // Match Jellyfin's omission of null properties on the last page.
   if(relative==='MangaReader/library' && groupedFixture) return send(url.searchParams.get('start') === '0' ? {next:100,items:[{id:'ten',title:'Chapter 10',series:'Folder title',seriesId:'one'},{id:'other',title:'Chapter 1',series:'Other manga',seriesId:'two'}]} : {items:[{id:'two',title:'Chapter 2',series:'Folder title',seriesId:'one'},{id:'duplicate',title:'Chapter 1',series:'Folder title',seriesId:'separate-folder'}]});
   if(relative==='MangaReader/library') return send({canIdentify:admin,items:emptyLibrary?[]:[{id:'book',title:'The Paper Moon — Volume 1',series:'The Paper Moon',seriesId:'folder-one',progress}]});
-  if(relative.endsWith('/metadata')) return send({details:metadataFixture ? mangaInfo() : null});
+  if(relative.endsWith('/metadata')) return send({details:metadataFixture ? mangaInfo() : null,notice:metadataFixture?'Identification saved beside your manga.':null});
+  if(relative.endsWith('/rename-preview')) return send({sourceName:'Tsuki no Kami',targetName:'The Paper Moon',malId:42});
+  if(relative.endsWith('/rename')) {let body='';for await(const chunk of req)body+=chunk;const value=JSON.parse(body);assert.equal(value.expectedName,'The Paper Moon');assert.equal(value.malId,42);renamed=true;return send({renamed:true,targetName:'The Paper Moon'});}
   if(relative.endsWith('/matches')) return failMetadataSearch ? send({detail:'MyAnimeList is temporarily unavailable. Try again later.'},503) : send([mangaInfo()]);
   if(relative.endsWith('/metadata/42')) {assert.equal(req.method,'PUT');identified=true;return send({details:mangaInfo()});}
   if(relative.endsWith('/cover')) {res.writeHead(200,{'Content-Type':'image/svg+xml'});return res.end('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600"><rect width="400" height="600" fill="#365444"/><circle cx="200" cy="220" r="110" fill="#d0edaa"/><text x="55" y="410" fill="white" font-size="30">THE PAPER MOON</text></svg>');}
@@ -134,6 +137,12 @@ const http = require('node:http');
   await page.locator('#books .manga-cover').waitFor();await page.getByText('★ 8.25 / 10 · MAL',{exact:true}).waitFor();
   await page.screenshot({path:path.resolve(__dirname,'../test-results/metadata-tiles-mobile.png'),fullPage:true});
   await page.locator('#books .book').click();await page.getByText('An original test story about a paper moon.',{exact:true}).waitFor();
+  assert.equal(await page.locator('#libraryTitle').textContent(),'The Paper Moon');
+  await page.getByText('Identification saved beside your manga.',{exact:true}).waitFor();
+  await page.locator('#renameFolder').click();assert.equal(renamed,false);
+  await page.locator('#renamePreview').click();await page.getByText('Tsuki no Kami → The Paper Moon',{exact:true}).waitFor();assert.equal(renamed,false);
+  await page.locator('#renameApply').click();await page.getByText(/Folder renamed to The Paper Moon/).waitFor();assert.equal(renamed,true);
+  await page.reload();await page.locator('#books .manga-cover').waitFor();await page.locator('#books .book').click();
   assert.equal(await page.locator('#malLink').getAttribute('href'),'https://myanimelist.net/manga/42');
   await page.locator('#identify').click();await page.locator('#identifySearch').click();await page.locator('#identifyResults button').click();
   await page.locator('#identifyPanel').waitFor({state:'hidden'});assert.equal(identified,true);

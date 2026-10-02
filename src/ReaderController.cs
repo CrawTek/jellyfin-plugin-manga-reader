@@ -13,6 +13,9 @@ public sealed class ReaderController(ILibraryManager library, IUserManager users
 {
     private Guid UserId => Guid.TryParse(User.FindFirst("Jellyfin-UserId")?.Value, out var id) ? id : Guid.Empty;
     private static readonly object ConfigurationLock = new();
+    private static readonly SemaphoreSlim RenameLock = new(1, 1);
+    private string[] MangaRoots => library.GetVirtualFolders().Where(f => Guid.TryParse(f.ItemId, out var id) && MangaLibraryIds.Contains(id)).SelectMany(f => f.Locations).ToArray();
+    private string? IdentityDirectory(Book book) => MangaFolderStorage.RegisteredDirectory(book.Path, MangaRoots);
     public sealed record MalSettings(string? ClientId);
     private static bool ValidClientId(string value) => value.Length <= 256 && value.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
     [Authorize(Policy = MediaBrowser.Common.Api.Policies.RequiresElevation)]
@@ -90,7 +93,7 @@ public sealed class ReaderController(ILibraryManager library, IUserManager users
             canIdentify = User.IsInRole("Administrator"),
             next = items.Count == 100 ? (int?)(start + 100) : null,
             items = items.OfType<Book>().Where(b => b.IsVisible(user) && ArchiveReader.Supports(b.Path))
-                .Select(b => new { id = b.Id, title = b.Name, seriesId = b.ParentId, series = Path.GetFileName(Path.GetDirectoryName(b.Path)), progress = progress.Get(UserId, b.Id) }).ToArray()
+                .Select(b => { var folder = MangaFolder.ForBook(b.Path); return new { id = b.Id, title = b.Name, seriesId = folder.Id, series = folder.Name, progress = progress.Get(UserId, b.Id) }; }).ToArray()
         });
     }
     private Book? AccessibleBook(Guid id)
@@ -106,9 +109,10 @@ public sealed class ReaderController(ILibraryManager library, IUserManager users
     public async Task<IActionResult> Metadata(Guid id, CancellationToken ct)
     {
         var book = AccessibleBook(id); if (book is null) return NotFound();
-        try { return Ok(await metadata.Get(book.ParentId, Path.GetFileName(Path.GetDirectoryName(book.Path)) ?? book.Name, ct)); }
+        var folder = MangaFolder.ForBook(book.Path);
+        try { return Ok(await metadata.Get(folder.Id, folder.Name, ct, IdentityDirectory(book))); }
         catch (MangaProviderException e) { return Problem(e.Message, statusCode: 503); }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException or JsonException)
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException or UnauthorizedAccessException or JsonException)
         { return Problem("MyAnimeList metadata is temporarily unavailable. You can still read your manga.", statusCode: 503); }
     }
     [Authorize(Policy = MediaBrowser.Common.Api.Policies.RequiresElevation)]
@@ -128,9 +132,9 @@ public sealed class ReaderController(ILibraryManager library, IUserManager users
     {
         var book = AccessibleBook(id); if (book is null) return NotFound();
         if (malId < 1) return BadRequest();
-        try { return Ok(await metadata.Identify(book.ParentId, malId, ct)); }
+        try { return Ok(await metadata.Identify(MangaFolder.ForBook(book.Path).Id, malId, ct, IdentityDirectory(book))); }
         catch (MangaProviderException e) { return Problem(e.Message, statusCode: 503); }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException or JsonException)
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException or UnauthorizedAccessException or JsonException)
         { return Problem("Could not save this manga match. Try again shortly.", statusCode: 503); }
     }
     [HttpGet("books/{id:guid}/cover")]
@@ -139,11 +143,48 @@ public sealed class ReaderController(ILibraryManager library, IUserManager users
         var book = AccessibleBook(id); if (book is null) return NotFound();
         try
         {
-            var bytes = await metadata.Cover(book.ParentId, ct); if (bytes is null) return NotFound();
+            var bytes = await metadata.Cover(MangaFolder.ForBook(book.Path).Id, ct); if (bytes is null) return NotFound();
             Response.Headers["Cache-Control"] = "private, no-store"; return File(bytes, "image/jpeg");
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException)
         { return NotFound(); }
+    }
+
+    public sealed record RenameRequest(string Mode, string? ExpectedName, int MalId);
+    [Authorize(Policy = MediaBrowser.Common.Api.Policies.RequiresElevation)]
+    [HttpPost("books/{id:guid}/rename-preview")]
+    public Task<IActionResult> PreviewRename(Guid id, RenameRequest value, CancellationToken ct) => RenameFolder(id, value, false, ct);
+
+    [Authorize(Policy = MediaBrowser.Common.Api.Policies.RequiresElevation)]
+    [HttpPost("books/{id:guid}/rename")]
+    public Task<IActionResult> ApplyRename(Guid id, RenameRequest value, CancellationToken ct) => RenameFolder(id, value, true, ct);
+
+    private async Task<IActionResult> RenameFolder(Guid id, RenameRequest value, bool apply, CancellationToken ct)
+    {
+        await RenameLock.WaitAsync(ct);
+        try
+        {
+            var book = AccessibleBook(id); if (book is null) return NotFound();
+            var source = IdentityDirectory(book);
+            if (source is null) return Problem("Enable this library in Manga Reader settings first.", statusCode: 422);
+            var folder = MangaFolder.ForBook(book.Path);
+            var details = (await metadata.Get(folder.Id, folder.Name, ct, source)).Details;
+            if (details is null) return Problem("Identify this manga before renaming its folder.", statusCode: 422);
+            var name = MangaFolderStorage.TargetName(details, value.Mode);
+            var destination = MangaFolderStorage.Destination(source, name, MangaRoots);
+            if (!apply) return Ok(new { sourceName = Path.GetFileName(source), targetName = name, malId = details.Id });
+            if (value.ExpectedName != name || value.MalId != details.Id) return Problem("The manga identification changed. Preview the rename again.", statusCode: 422);
+            var items = library.GetItemList(new InternalItemsQuery { IncludeItemTypes = [Jellyfin.Data.Enums.BaseItemKind.Book], Recursive = true });
+            var mapping = items.OfType<Book>().Where(b => !string.IsNullOrEmpty(b.Path) && MangaFolderStorage.Within(b.Path, source)).ToDictionary(b => b.Id,
+                b => library.GetNewItemId(Path.Combine(destination, Path.GetRelativePath(source, b.Path)), b.GetType()));
+            MangaIdentityFile.Write(source, details);
+            progress.CopyForRename(mapping, () => Directory.Move(source, destination));
+            library.QueueLibraryScan();
+            return Ok(new { renamed = true, targetName = name });
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or MangaProviderException)
+        { return Problem(e is UnauthorizedAccessException ? "Give Jellyfin write access to the manga folder and its parent before renaming." : e.Message, statusCode: 422); }
+        finally { RenameLock.Release(); }
     }
 
     [AllowAnonymous]

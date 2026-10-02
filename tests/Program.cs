@@ -9,6 +9,13 @@ void Throws<T>(Action action, string name) where T : Exception
 { try { action(); } catch (T) { Check(true, name); return; } throw new Exception(name); }
 try
 {
+    var soldier = MangaFolder.ForBook(Path.Combine(root, "Chained Soldier", "Chapter 1.cbz"));
+    var slime = MangaFolder.ForBook(Path.Combine(root, "Tensei Shitara Slime Datta Ken", "Chapter 1.cbz"));
+    Check(soldier.Id != slime.Id, "Physical manga folders have separate grouping and metadata identities");
+    Check(soldier.Id == MangaFolder.ForBook(Path.Combine(root, "Chained Soldier", "Chapter 2.cbz")).Id, "Chapters in one physical folder stay together");
+    Check(soldier.Name == "Chained Soldier" && slime.Name == "Tensei Shitara Slime Datta Ken", "Shelf titles use exact folder names");
+    Check(soldier.Id != MangaFolder.ForBook(Path.Combine(root, "Other Library", "Chained Soldier", "Chapter 1.cbz")).Id, "Same folder names at different locations remain separate");
+    Check(soldier.Id == MangaFolder.ForBook(Path.Combine(root, "Chained Soldier", "..", "Chained Soldier", "Chapter 1.cbz")).Id, "Normalize equivalent directory paths");
     var path = Path.Combine(root, "book.cbz");
     using (var zip = ZipFile.Open(path, ZipArchiveMode.Create))
         foreach (var name in new[] { "10.png", "2.png", "1.png", "__MACOSX/._cover.png", "ComicInfo.xml" })
@@ -72,6 +79,45 @@ try
     var cacheFile = Path.Combine(metaRoot, a.ToString("N") + ".json");
     File.WriteAllText(cacheFile, System.Text.Json.JsonSerializer.Serialize(new MangaMatch(DateTimeOffset.UtcNow.AddDays(-8), false, details)));
     Check((await meta.Get(a, "The Paper Moon", default)).Details?.Id == 1, "Provider outage retains cached metadata");
+    Check(details.EnglishTitle == "The Paper Moon", "Keep official English title separately");
+    var mangaRoot = Path.Combine(root, "manga");
+    var mangaDir = Path.Combine(mangaRoot, "Original Title"); Directory.CreateDirectory(mangaDir);
+    File.WriteAllText(Path.Combine(mangaDir, "chapter.cbz"), "chapter content");
+    MangaIdentityFile.Write(mangaDir, details);
+    Check(MangaIdentityFile.Read(mangaDir)?.MalId == 1, "Identity file records MAL ID beside manga");
+    var identityText = File.ReadAllText(Path.Combine(mangaDir, MangaIdentityFile.Name));
+    Check(!identityText.Contains("test-client-id") && !identityText.Contains("ClientId"), "Identity file contains no API credentials");
+    var recovered = await new MangaMetadata(Path.Combine(root, "reset-cache"), client, () => "").Get(Guid.NewGuid(), "Unrelated folder name", default, mangaDir);
+    Check(recovered.Details?.Id == 1 && recovered.Details.EnglishTitle == "The Paper Moon" && recovered.Notice is not null, "Reset server restores identity offline without title matching");
+    handler.Fail = false;
+    var autoDir = Path.Combine(mangaRoot, "Auto Match"); Directory.CreateDirectory(autoDir);
+    await new MangaMetadata(metaRoot, client, () => "test-client-id").Get(b, "Any folder", default, autoDir);
+    Check(MangaIdentityFile.Read(autoDir)?.MalId == 1, "Cached matches automatically gain portable identification files");
+    MangaIdentityFile.Write(autoDir, details with { Id = 99, EnglishTitle = "Stored identity wins" });
+    var authoritative = await new MangaMetadata(metaRoot, client, () => "").Get(b, "Any folder", default, autoDir);
+    Check(authoritative.Details?.Id == 99, "Folder identification overrides mismatched server metadata cache");
+    var unwritable = await new MangaMetadata(metaRoot, client, () => "").Get(a, "Any folder", default, Path.Combine(root,"missing","folder"));
+    Check(unwritable.Notice is not null, "Unavailable storage or API reports a visible notice");
+    var online = await new MangaMetadata(Path.Combine(root, "online-cache"), client, () => "test-client-id").Get(Guid.NewGuid(), "Unrelated folder name", default, mangaDir);
+    Check(online.Details?.Synopsis == "Example" && handler.LastPath == "/v2/manga/1", "Reset recovery fetches metadata by saved ID");
+    var targetName = MangaFolderStorage.TargetName(details, "english");
+    Check(targetName == "The Paper Moon" && MangaFolderStorage.TargetName(details with { EnglishTitle = null }, "english") == "1", "Rename prefers English title with numeric ID fallback");
+    Check(MangaFolderStorage.TargetName(details with { EnglishTitle = "CON" }, "english") == "1", "Reserved filenames fall back to MAL ID");
+    Throws<IOException>(() => MangaFolderStorage.Destination(mangaRoot, "Renamed Library", [mangaRoot]), "Do not rename library root");
+    Throws<IOException>(() => MangaFolderStorage.Destination(mangaDir, "../outside", [mangaRoot]), "Do not accept path traversal");
+    Directory.CreateDirectory(Path.Combine(mangaRoot, targetName));
+    Throws<IOException>(() => MangaFolderStorage.Destination(mangaDir, targetName, [mangaRoot]), "Never merge existing manga folders");
+    var destination = MangaFolderStorage.Destination(mangaDir, "1", [mangaRoot]);
+    var newBook = Guid.NewGuid(); store.Save(b, book, new(3, "rtl", 0), 3);
+    store.CopyForRename(new Dictionary<Guid,Guid>{{book,newBook}}, () => Directory.Move(mangaDir, destination));
+    Check(File.ReadAllText(Path.Combine(destination, "chapter.cbz")) == "chapter content" && MangaIdentityFile.Read(destination)?.MalId == 1, "Rename retains chapters and identification file");
+    Check(store.Get(a,newBook)?.Page == 1 && store.Get(b,newBook)?.Page == 3, "Rename preserves all users' reading progress");
+    Throws<IOException>(() => store.CopyForRename(new Dictionary<Guid,Guid>{{book,newBook}}, () => throw new Exception("must not move")), "Destination progress is never overwritten");
+    var failedBook = Guid.NewGuid();
+    Throws<IOException>(() => store.CopyForRename(new Dictionary<Guid,Guid>{{book,failedBook}}, () => throw new IOException("move failed")), "Failed folder move is reported");
+    Check(store.Get(a,failedBook) is null && store.Get(a,book)?.Page == 1, "Failed rename rolls back copied progress and keeps original");
+    File.WriteAllText(Path.Combine(destination, MangaIdentityFile.Name), "{\"Version\":1,\"MalId\":0}");
+    Throws<IOException>(() => MangaIdentityFile.Read(destination), "Reject invalid saved MAL ID rather than guessing");
     Console.WriteLine($"{checks} checks passed.");
 }
 finally { Directory.Delete(root, true); }
