@@ -14,6 +14,7 @@ public sealed class Configuration : BasePluginConfiguration
     public Guid MangaLibraryId { get; set; }
     public Guid[] MangaLibraryIds { get; set; } = [];
     public bool EnableInAppReader { get; set; } = true;
+    public string MalClientId { get; set; } = "";
 }
 
 public sealed class Plugin : BasePlugin<Configuration>, IHasWebPages
@@ -36,7 +37,8 @@ public sealed class ServiceRegistrator : IPluginServiceRegistrator
     {
         services.AddSingleton<ProgressStore>();
         services.AddSingleton<ArchiveReader>();
-        services.AddSingleton<MangaMetadata>();
+        services.AddSingleton(provider => new MangaMetadata(provider.GetRequiredService<IApplicationPaths>(),
+            () => Plugin.Instance?.Configuration.MalClientId ?? ""));
         services.AddTransient<IStartupFilter, ReaderStartupFilter>();
     }
 }

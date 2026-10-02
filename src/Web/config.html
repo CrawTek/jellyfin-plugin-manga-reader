@@ -1,6 +1,16 @@
 <div id="mangaReaderConfig" data-role="page" class="page type-interior pluginConfigurationPage" data-controller="__plugin/manga-reader-config.js">
   <div data-role="content"><div class="content-primary">
     <h1>Manga Reader</h1>
+    <h2>MyAnimeList metadata</h2>
+    <p>Enter the API Client ID from your <a href="https://myanimelist.net/apiconfig" target="_blank" rel="noopener noreferrer">MyAnimeList API application</a>. Use the Client ID, not the Client Secret. Lookups go directly to the official MyAnimeList API.</p>
+    <form id="malSettingsForm">
+      <label>MyAnimeList API Client ID<input id="malClientId" type="password" autocomplete="off" maxlength="256" is="emby-input"></label>
+      <p id="malConfiguredStatus"></p>
+      <button id="malSave" type="submit" is="emby-button" class="raised button-submit">Save Client ID</button>
+      <button id="malTest" type="button" is="emby-button" class="raised">Test connection</button>
+      <button id="malClear" type="button" is="emby-button" class="raised">Remove Client ID</button>
+    </form>
+    <p id="malSettingsStatus" role="status"></p>
     <p>To add manga, open Dashboard → Libraries → Add Media Library, choose Manga, and select its folder using Jellyfin’s folder picker.</p>
     <p>Manga uses Jellyfin’s Books library type internally. Select its library tile in Jellyfin Web or the Android phone/tablet app to read. Each account keeps its own saved page.</p>
     <h2>Enable an existing Books library</h2>

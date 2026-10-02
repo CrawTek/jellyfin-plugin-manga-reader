@@ -36,7 +36,7 @@ async function loadMetadata(book) {
             if (d?.image) {
                 try { const response = await request(`MangaReader/books/${book.id}/cover`); const blob = await response.blob(); if (auth === session) covers.set(id, URL.createObjectURL(blob)); } catch {}
             }
-        } catch { if (auth === session) metadata.set(id, {unavailable:true}); }
+        } catch(e) { if (auth === session) metadata.set(id, {unavailable:true,error:e.message}); }
         finally { metadataLoading.delete(id); if (auth === session && selectedSeries === id) renderDetails(); }
     })();
     metadataLoading.set(id, task); return task;
@@ -52,7 +52,7 @@ function renderDetails() {
     $('seriesDetails').hidden = !book; $('identify').hidden = !book || !canIdentify;
     if (!book) return;
     const d = metadata.get(selectedSeries);
-    $('seriesSynopsis').textContent = d?.synopsis || (d?.unavailable ? 'Metadata is temporarily unavailable. Your chapters are ready to read.' : metadata.has(selectedSeries) ? 'No unique MyAnimeList match found. An administrator can identify this manga.' : 'Loading MyAnimeList information…');
+    $('seriesSynopsis').textContent = d?.synopsis || (d?.unavailable ? d.error || 'Metadata is temporarily unavailable. Your chapters are ready to read.' : metadata.has(selectedSeries) ? 'No unique MyAnimeList match found. An administrator can identify this manga.' : 'Loading MyAnimeList information…');
     $('seriesFacts').textContent = d && !d.unavailable ? [d.score ? `★ ${d.score.toFixed(2)} / 10 · MyAnimeList` : '',d.status,...d.genres].filter(Boolean).join(' · ') : '';
     $('seriesCover').hidden = !covers.has(selectedSeries);
     if (covers.has(selectedSeries)) $('seriesCover').src = covers.get(selectedSeries);
@@ -60,7 +60,7 @@ function renderDetails() {
 }
 let device = localStorage.getItem('manga-reader-device');
 if (!device) { device = Array.from(crypto.getRandomValues(new Uint8Array(16)), v => v.toString(16).padStart(2,'0')).join(''); localStorage.setItem('manga-reader-device', device); }
-const authHeader = () => embedded ? 'MediaBrowser Token=' + JSON.stringify(auth?.token || '') : `MediaBrowser Client="Manga Reader", Device="Browser", DeviceId="${device}", Version="0.3.1"${auth ? `, Token="${auth.token}"` : ''}`;
+const authHeader = () => embedded ? 'MediaBrowser Token=' + JSON.stringify(auth?.token || '') : `MediaBrowser Client="Manga Reader", Device="Browser", DeviceId="${device}", Version="0.4.0"${auth ? `, Token="${auth.token}"` : ''}`;
 function message(text = '') { $('status').textContent = text; $('status').hidden = !text; }
 async function request(path, options = {}) {
     const response = await fetch(new URL(path, root), { ...options, headers: { Authorization: authHeader(), ...options.headers } });

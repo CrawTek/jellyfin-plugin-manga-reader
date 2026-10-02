@@ -6,12 +6,17 @@ const http = require('node:http');
 
 (async () => {
  const web = path.resolve(__dirname, '../src/Web');
+ let savedClientId = '';
  let progress = null, revision = 0, failSave = false, conflict = false, registered = false, failRegistration = false, emptyLibrary = false, groupedFixture = false, failMetadataSearch = false, metadataFixture = false, identified = false, admin = true;
  const mangaInfo = () => ({id:42,title:'The Paper Moon',score:8.25,synopsis:'An original test story about a paper moon.',genres:['Adventure'],status:'Publishing',image:'https://cdn.myanimelist.net/images/manga/test.jpg'});
  const server = http.createServer(async (req,res) => {
   const url = new URL(req.url, 'http://localhost');
   const send = (data, status=200) => { res.writeHead(status, {'Content-Type':'application/json'});res.end(JSON.stringify(data)); };
   const relative = url.pathname.replace('/jellyfin/', '');
+  if(relative==='web/config-test.html') {
+   res.writeHead(200,{'Content-Type':'text/html'});
+   return res.end(fs.readFileSync(path.join(web,'config.html'),'utf8') + `<script>window.ApiClient={getUrl:p=>'/jellyfin/'+p,accessToken:()=> 'test-token',getVirtualFolders:async()=>[{ItemId:'library',Name:'Manga',CollectionType:'books'}]};</script><script type="module">import setup from '/jellyfin/MangaReader/assets/config.js';const view=document.querySelector('#mangaReaderConfig');setup(view);view.dispatchEvent(new Event('viewshow'));</script>`);
+  }
   if(relative==='web/index.html') { res.writeHead(200,{'Content-Type':'text/html'});return res.end(fs.readFileSync(path.join(__dirname,'shell.html'))); }
   if(url.pathname.endsWith('/favicon.ico')) { res.writeHead(204); return res.end(); }
   if(relative==='MangaReader/reader' || relative.startsWith('MangaReader/assets/')) {
@@ -22,13 +27,20 @@ const http = require('node:http');
   if(relative==='Users/AuthenticateByName') return send({AccessToken:'test-token'});
   // Jellyfin 12 may disable legacy X-Emby-Token authentication.
   assert.match(req.headers.authorization || '', /Token="test-token"/);
+  if(relative==='MangaReader/settings/mal' || relative==='MangaReader/settings/mal/test') {
+   if(req.method==='GET') return send({configured:!!savedClientId});
+   let body='';for await(const chunk of req)body+=chunk;
+   const value=JSON.parse(body).clientId;
+   if(relative.endsWith('/test')) return (value || savedClientId)==='valid-client' ? send({connected:true}) : send({detail:'MyAnimeList rejected the Client ID.'},503);
+   savedClientId=value;return send({configured:!!savedClientId});
+  }
   if(relative==='MangaReader/bootstrap') return send({enabled:true,libraries:registered?[{id:'11111111111111111111111111111111',name:'My Manga'}]:[]});
   if(relative.startsWith('MangaReader/libraries/')) { if(failRegistration)return send({},500);registered=true;return send({}); }
   // Match Jellyfin's omission of null properties on the last page.
   if(relative==='MangaReader/library' && groupedFixture) return send(url.searchParams.get('start') === '0' ? {next:100,items:[{id:'ten',title:'Chapter 10',series:'Folder title',seriesId:'one'},{id:'other',title:'Chapter 1',series:'Other manga',seriesId:'two'}]} : {items:[{id:'two',title:'Chapter 2',series:'Folder title',seriesId:'one'},{id:'duplicate',title:'Chapter 1',series:'Folder title',seriesId:'separate-folder'}]});
   if(relative==='MangaReader/library') return send({canIdentify:admin,items:emptyLibrary?[]:[{id:'book',title:'The Paper Moon — Volume 1',series:'The Paper Moon',seriesId:'folder-one',progress}]});
   if(relative.endsWith('/metadata')) return send({details:metadataFixture ? mangaInfo() : null});
-  if(relative.endsWith('/matches')) return failMetadataSearch ? send({detail:'Jikan cannot reach MyAnimeList. Try a manga link or ID, or try again later.'},503) : send([mangaInfo()]);
+  if(relative.endsWith('/matches')) return failMetadataSearch ? send({detail:'MyAnimeList is temporarily unavailable. Try again later.'},503) : send([mangaInfo()]);
   if(relative.endsWith('/metadata/42')) {assert.equal(req.method,'PUT');identified=true;return send({details:mangaInfo()});}
   if(relative.endsWith('/cover')) {res.writeHead(200,{'Content-Type':'image/svg+xml'});return res.end('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600"><rect width="400" height="600" fill="#365444"/><circle cx="200" cy="220" r="110" fill="#d0edaa"/><text x="55" y="410" fill="white" font-size="30">THE PAPER MOON</text></svg>');}
   if(relative==='MangaReader/books/book') return send({id:'book',title:'The Paper Moon — Volume 1',total:3,progress});
@@ -106,8 +118,8 @@ const http = require('node:http');
   await shell.evaluate(()=>window.testToken='test-token');
   await shell.waitForTimeout(2200);
   failRegistration=true;
-  const dialog=shell.waitForEvent('dialog');await shell.locator('button[type=submit]').click();
-  const warning=await dialog;assert.match(warning.message(),/library was created.*Do not create it again/);await warning.accept();
+  const dialog=shell.waitForEvent('dialog').then(async warning=>{assert.match(warning.message(),/library was created.*Do not create it again/);await warning.accept();});
+  await Promise.all([shell.locator('button[type=submit]').click(),dialog]);
   await shell.waitForFunction(()=>document.body.dataset.created==='3');
   groupedFixture=true;await page.reload();await page.getByRole('button',{name:'Folder title 2 chapters →',exact:true}).waitFor();
   assert.equal(await page.locator('#books .book').count(),3);
@@ -127,10 +139,24 @@ const http = require('node:http');
   await page.locator('#identifyPanel').waitFor({state:'hidden'});assert.equal(identified,true);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   await page.screenshot({path:path.resolve(__dirname,'../test-results/metadata-details-mobile.png'),fullPage:true});
-  failMetadataSearch=true;await page.locator('#identify').click();await page.locator('#identifySearch').click();await page.getByText('Jikan cannot reach MyAnimeList. Try a manga link or ID, or try again later.',{exact:true}).waitFor();failMetadataSearch=false;await page.locator('#identifyQuery').fill('https://myanimelist.net/manga/42');await page.locator('#identifySearch').click();await page.locator('#identifyResults button').waitFor();admin=false;await page.reload();await page.locator('#books .book').click();assert.equal(await page.locator('#identify').isVisible(),false);
+  failMetadataSearch=true;await page.locator('#identify').click();await page.locator('#identifySearch').click();await page.getByText('MyAnimeList is temporarily unavailable. Try again later.',{exact:true}).waitFor();failMetadataSearch=false;await page.locator('#identifyQuery').fill('https://myanimelist.net/manga/42');await page.locator('#identifySearch').click();await page.locator('#identifyResults button').waitFor();admin=false;await page.reload();await page.locator('#books .book').click();assert.equal(await page.locator('#identify').isVisible(),false);
   emptyLibrary=true;await page.reload();await page.locator('#empty').waitFor();
   assert.equal(await page.locator('#more').isVisible(),false);assert.equal(await page.locator('#status').isVisible(),false);
   assert.deepEqual(errors,[]);
-  console.log('PASS integration: ordinary Books unchanged, Manga preset/native folder arguments, library registration, same-window session handoff, resume, failed-save back guard, Android navigation hook, account logout, registration recovery warning');
+  const config=await browser.newPage();config.on('pageerror',e=>errors.push(e.message));
+  await config.goto(`http://127.0.0.1:${server.address().port}/jellyfin/web/config-test.html`);
+  await config.getByText('No Client ID saved.',{exact:false}).waitFor();
+  await config.locator('#malClientId').fill('invalid-client');await config.locator('#malTest').click();await config.getByText('MyAnimeList rejected the Client ID.',{exact:true}).waitFor();
+  assert.equal(savedClientId,'');
+  await config.locator('#malClientId').fill('valid-client');await config.locator('#malTest').click();await config.getByText('Connection successful. Save this Client ID to use it.',{exact:true}).waitFor();assert.equal(savedClientId,'');
+  await config.locator('#malSave').click();await config.getByText('Saved. Reopen the manga reader to load metadata. No server restart is needed.',{exact:true}).waitFor();assert.equal(savedClientId,'valid-client');
+  assert.equal(await config.locator('#malClientId').inputValue(),'');
+  await config.reload();await config.getByText('A Client ID is saved.',{exact:false}).waitFor();assert.equal(await config.locator('#malClientId').inputValue(),'');
+  await config.locator('#malSave').click();await config.getByText('Enter a Client ID to save. The existing value has not changed.',{exact:true}).waitFor();assert.equal(savedClientId,'valid-client');
+  await config.locator('#malTest').click();await config.getByText('Connection successful with the saved Client ID.',{exact:true}).waitFor();
+  await config.locator('#malClear').click();await config.getByText('Client ID removed. Cached metadata and reading progress are preserved.',{exact:true}).waitFor();assert.equal(savedClientId,'');
+  failRegistration=false;await config.locator('#mangaLibraryForm button').click();await config.getByText('Enabled. Reload Jellyfin or reopen the Android app, then select this library on the home screen.',{exact:true}).waitFor();
+  assert.deepEqual(errors,[]);
+  console.log('PASS integration: library registration, in-app reading, resume, metadata tiles, identification, official API settings save/test/remove, no key echo, existing library setup preserved');
  } finally { await browser.close();server.close(); }
 })().catch(e=>{console.error(e);process.exit(1);});

@@ -13,6 +13,35 @@ public sealed class ReaderController(ILibraryManager library, IUserManager users
 {
     private Guid UserId => Guid.TryParse(User.FindFirst("Jellyfin-UserId")?.Value, out var id) ? id : Guid.Empty;
     private static readonly object ConfigurationLock = new();
+    public sealed record MalSettings(string? ClientId);
+    private static bool ValidClientId(string value) => value.Length <= 256 && value.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
+    [Authorize(Policy = MediaBrowser.Common.Api.Policies.RequiresElevation)]
+    [HttpGet("settings/mal")]
+    public IActionResult MalConfiguration() => Ok(new { configured = !string.IsNullOrWhiteSpace(Plugin.Instance?.Configuration.MalClientId) });
+
+    [Authorize(Policy = MediaBrowser.Common.Api.Policies.RequiresElevation)]
+    [HttpPut("settings/mal")]
+    public IActionResult SaveMalConfiguration(MalSettings settings)
+    {
+        var value = settings.ClientId?.Trim();
+        if (value is null || !ValidClientId(value)) return BadRequest("Enter the MAL Client ID, not a client secret or access token.");
+        lock (ConfigurationLock)
+        {
+            var plugin = Plugin.Instance!; plugin.Configuration.MalClientId = value; plugin.SaveConfiguration();
+        }
+        return Ok(new { configured = value.Length > 0 });
+    }
+    [Authorize(Policy = MediaBrowser.Common.Api.Policies.RequiresElevation)]
+    [HttpPost("settings/mal/test")]
+    public async Task<IActionResult> TestMalConfiguration(MalSettings settings, CancellationToken ct)
+    {
+        var value = string.IsNullOrWhiteSpace(settings.ClientId) ? Plugin.Instance?.Configuration.MalClientId ?? "" : settings.ClientId.Trim();
+        if (!ValidClientId(value)) return BadRequest("Enter a valid MAL Client ID.");
+        try { await metadata.TestConnection(value, ct); return Ok(new { connected = true }); }
+        catch (MangaProviderException e) { return Problem(e.Message, statusCode: 503); }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException)
+        { return Problem("Could not connect to the official MyAnimeList API. Try again later.", statusCode: 503); }
+    }
     private static Guid[] MangaLibraryIds => (Plugin.Instance?.Configuration.MangaLibraryIds ?? [])
         .Append(Plugin.Instance?.Configuration.MangaLibraryId ?? Guid.Empty).Where(id => id != Guid.Empty).Distinct().ToArray();
 
@@ -78,6 +107,7 @@ public sealed class ReaderController(ILibraryManager library, IUserManager users
     {
         var book = AccessibleBook(id); if (book is null) return NotFound();
         try { return Ok(await metadata.Get(book.ParentId, Path.GetFileName(Path.GetDirectoryName(book.Path)) ?? book.Name, ct)); }
+        catch (MangaProviderException e) { return Problem(e.Message, statusCode: 503); }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException or JsonException)
         { return Problem("MyAnimeList metadata is temporarily unavailable. You can still read your manga.", statusCode: 503); }
     }
@@ -88,8 +118,9 @@ public sealed class ReaderController(ILibraryManager library, IUserManager users
         if (AccessibleBook(id) is null) return NotFound();
         if (string.IsNullOrWhiteSpace(query) || query.Length > 500) return BadRequest();
         try { return Ok(await metadata.Search(query, ct)); }
+        catch (MangaProviderException e) { return Problem(e.Message, statusCode: 503); }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException)
-        { return Problem("The MyAnimeList lookup service (Jikan) is temporarily unavailable. Try a MyAnimeList manga link or numeric ID instead of a title, or try again later. Your manga files and reading progress are unaffected.", statusCode: 503); }
+        { return Problem("The official MyAnimeList API is temporarily unavailable. Try again later. Your manga files and reading progress are unaffected.", statusCode: 503); }
     }
     [Authorize(Policy = MediaBrowser.Common.Api.Policies.RequiresElevation)]
     [HttpPut("books/{id:guid}/metadata/{malId:int}")]
@@ -98,6 +129,7 @@ public sealed class ReaderController(ILibraryManager library, IUserManager users
         var book = AccessibleBook(id); if (book is null) return NotFound();
         if (malId < 1) return BadRequest();
         try { return Ok(await metadata.Identify(book.ParentId, malId, ct)); }
+        catch (MangaProviderException e) { return Problem(e.Message, statusCode: 503); }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException or JsonException)
         { return Problem("Could not save this manga match. Try again shortly.", statusCode: 503); }
     }

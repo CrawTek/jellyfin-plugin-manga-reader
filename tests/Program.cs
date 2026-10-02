@@ -39,7 +39,7 @@ try
     Throws<ArgumentException>(() => store.Save(a, book, new(1, "invalid", 1), 3), "Reject invalid direction");
     store.Save(a, book, new(1, "ltr", 1), 3);
     Check(store.Get(a, book)?.Page == 1, "Re-reading an earlier page updates resume");
-    using var data = System.Text.Json.JsonDocument.Parse("""{"mal_id":1,"title":"Paper Moon","titles":[{"title":"The Paper Moon"}],"score":null,"synopsis":"Example","genres":[{"name":"Adventure"}],"images":{"jpg":{"large_image_url":"https://cdn.myanimelist.net/images/manga/1/test.jpg"}}}""");
+    using var data = System.Text.Json.JsonDocument.Parse("""{"id":1,"title":"Paper Moon","alternative_titles":{"en":"The Paper Moon","synonyms":["Moon Paper"]},"mean":null,"synopsis":"Example","genres":[{"name":"Adventure"}],"main_picture":{"large":"https://cdn.myanimelist.net/images/manga/1/test.jpg"}}""");
     var details = MangaMetadata.Parse(data.RootElement);
     Check(details.Score is null && details.Genres.SequenceEqual(new[]{"Adventure"}), "Missing score remains unrated; genres parsed");
     Check(MangaMetadata.ExactMatch("The Paper Moon", [details])?.Id == 1, "Alternate title exact match");
@@ -49,13 +49,25 @@ try
     var handler = new MetadataHandler(data.RootElement.GetRawText());
     using var client = new HttpClient(handler);
     var metaRoot = Path.Combine(root, "metadata");
-    var meta = new MangaMetadata(metaRoot, client);
+    var meta = new MangaMetadata(metaRoot, client, () => "test-client-id");
     Check((await meta.Get(a, "The Paper Moon", default)).Details?.Id == 1, "Fetch and cache matched manga");
-    Check((await new MangaMetadata(metaRoot, client).Get(a, "The Paper Moon", default)).Details?.Id == 1 && handler.Calls == 1, "Metadata survives restart without another request");
+    Check((await new MangaMetadata(metaRoot, client, () => "test-client-id").Get(a, "The Paper Moon", default)).Details?.Id == 1 && handler.Calls == 1, "Metadata survives restart without another request");
     Check((await meta.Identify(b, 1, default)).Pinned, "Administrator identification persists selected match");
     Check(MangaMetadata.MangaId("https://myanimelist.net/manga/2/Berserk") == 2 && MangaMetadata.MangaId("2") == 2, "Accept MAL manga URL or ID");
     Check(MangaMetadata.MangaId("https://evil.test/manga/2") is null && MangaMetadata.MangaId("https://myanimelist.net/anime/2") is null && MangaMetadata.MangaId("0") is null, "Reject non-manga links and invalid IDs");
-    Check((await meta.Search("https://myanimelist.net/manga/1/Paper_Moon", default)).Single().Id == 1 && handler.LastPath == "/v4/manga/1", "ID lookup bypasses title search");
+    Check((await meta.Search("https://myanimelist.net/manga/1/Paper_Moon", default)).Single().Id == 1 && handler.LastPath == "/v2/manga/1", "ID lookup bypasses title search");
+    Check(handler.LastHost == "api.myanimelist.net" && handler.LastClientId == "test-client-id", "Use official API and per-request Client ID header");
+    var beforeMissing = handler.Calls;
+    Throws<MangaProviderException>(() => new MangaMetadata(metaRoot, client, () => "").Search("Paper Moon", default).GetAwaiter().GetResult(), "Missing Client ID gives setup guidance");
+    Check(handler.Calls == beforeMissing, "Missing Client ID makes no network request");
+    await meta.TestConnection("replacement-client", default);
+    Check(handler.LastClientId == "replacement-client", "Test candidate Client ID without saving it");
+    await meta.Search("Paper Moon", default);
+    Check(handler.LastClientId == "test-client-id", "Connection test does not replace saved key");
+    handler.ResponseCode = System.Net.HttpStatusCode.Unauthorized;
+    Throws<MangaProviderException>(() => meta.Search("Paper Moon", default).GetAwaiter().GetResult(), "Rejected credentials give configuration guidance");
+    handler.ResponseCode = System.Net.HttpStatusCode.OK;
+    Check((await meta.Cover(a, default))?.Length == 4 && handler.LastHost == "cdn.myanimelist.net" && handler.LastClientId is null, "Cover download never sends the MAL Client ID");
     handler.Fail = true;
     var cacheFile = Path.Combine(metaRoot, a.ToString("N") + ".json");
     File.WriteAllText(cacheFile, System.Text.Json.JsonSerializer.Serialize(new MangaMatch(DateTimeOffset.UtcNow.AddDays(-8), false, details)));
@@ -72,11 +84,17 @@ sealed class MetadataHandler(string item) : HttpMessageHandler
     public int Calls;
     public bool Fail;
     public string? LastPath;
+    public string? LastHost;
+    public string? LastClientId;
+    public System.Net.HttpStatusCode ResponseCode = System.Net.HttpStatusCode.OK;
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         Calls++;
         LastPath = request.RequestUri!.AbsolutePath;
-        return Task.FromResult(new HttpResponseMessage(Fail ? System.Net.HttpStatusCode.ServiceUnavailable : System.Net.HttpStatusCode.OK)
-        { Content = new StringContent("{\"data\":" + (request.RequestUri!.Query.Length > 0 ? "[" + item + "]" : item) + "}") });
+        LastHost = request.RequestUri.Host;
+        LastClientId = request.Headers.TryGetValues("X-MAL-CLIENT-ID", out var values) ? values.Single() : null;
+        if (LastHost == "cdn.myanimelist.net") return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new ByteArrayContent([0xff, 0xd8, 0xff, 0x00]) });
+        return Task.FromResult(new HttpResponseMessage(Fail ? System.Net.HttpStatusCode.ServiceUnavailable : ResponseCode)
+        { Content = new StringContent(request.RequestUri!.AbsolutePath == "/v2/manga" ? "{\"data\":[{\"node\":" + item + "}]}" : item) });
     }
 }

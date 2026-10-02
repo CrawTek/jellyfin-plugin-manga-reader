@@ -7,17 +7,20 @@ namespace Jellyfin.Plugin.MangaReader;
 
 public sealed record MangaDetails(int Id, string Title, string[] Titles, string Synopsis, double? Score, string[] Genres, string Status, string? Image);
 public sealed record MangaMatch(DateTimeOffset Checked, bool Pinned, MangaDetails? Details);
+public sealed class MangaProviderException(string message) : Exception(message);
 
 // Shared server cache. Only administrators can change a title's selected match.
 public sealed class MangaMetadata
 {
     private readonly string root;
     private readonly HttpClient http;
+    private readonly Func<string> clientId;
+    private const string Fields = "id,title,main_picture,alternative_titles,synopsis,mean,status,genres";
     private readonly SemaphoreSlim gate = new(1, 1);
     private DateTimeOffset nextRequest;
-    public MangaMetadata(IApplicationPaths paths) : this(Path.Combine(paths.DataPath, "manga-reader", "metadata"),
-        new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(20) }) { }
-    public MangaMetadata(string directory, HttpClient client) { root = directory; http = client; }
+    public MangaMetadata(IApplicationPaths paths, Func<string> getClientId) : this(Path.Combine(paths.DataPath, "manga-reader", "metadata"),
+        new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(20) }, getClientId) { }
+    public MangaMetadata(string directory, HttpClient client, Func<string> getClientId) { root = directory; http = client; clientId = getClientId; }
     private string FilePath(Guid folder) => Path.Combine(root, folder.ToString("N") + ".json");
     public static string Normalize(string title) => string.Concat(title.Normalize(NormalizationForm.FormKD)
         .Where(c => char.IsLetterOrDigit(c) && CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark)).ToLowerInvariant();
@@ -38,33 +41,48 @@ public sealed class MangaMetadata
         Directory.CreateDirectory(root);
         var path = FilePath(folder); File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(value)); File.Move(path + ".tmp", path, true);
     }
-    private async Task<JsonDocument> Fetch(string path, CancellationToken ct)
+    private async Task<JsonDocument> Fetch(string path, CancellationToken ct, string? candidateClientId = null)
     {
+        var key = (candidateClientId ?? clientId()).Trim();
+        if (string.IsNullOrEmpty(key)) throw new MangaProviderException("Add a MyAnimeList API Client ID in Dashboard → Plugins → Manga Reader → Settings to enable metadata.");
         var delay = nextRequest - DateTimeOffset.UtcNow;
         if (delay > TimeSpan.Zero) await Task.Delay(delay, ct);
         nextRequest = DateTimeOffset.UtcNow.AddMilliseconds(1100);
-        using var response = await http.GetAsync("https://api.jikan.moe/v4/" + path, ct);
-        if ((int)response.StatusCode == 429) nextRequest = DateTimeOffset.UtcNow.AddMinutes(1);
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.myanimelist.net/v2/" + path);
+        request.Headers.Add("X-MAL-CLIENT-ID", key);
+        request.Headers.UserAgent.ParseAdd("Jellyfin-MangaReader/0.4.0");
+        using var response = await http.SendAsync(request, ct);
+        if ((int)response.StatusCode is 401 or 403) throw new MangaProviderException("MyAnimeList rejected the request. Check the API Client ID in Manga Reader settings and that your MAL application is enabled.");
+        if ((int)response.StatusCode == 429) { nextRequest = DateTimeOffset.UtcNow.AddMinutes(1); throw new MangaProviderException("MyAnimeList is limiting requests. Wait a minute before trying again."); }
+        if ((int)response.StatusCode == 404) throw new MangaProviderException("MyAnimeList could not find that manga ID. Check that the link is for a manga, not an anime.");
+        if ((int)response.StatusCode == 400) throw new MangaProviderException("MyAnimeList could not accept that search. Try a title of at least two characters or a manga ID.");
         response.EnsureSuccessStatusCode();
         return JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
     }
     public static MangaDetails Parse(JsonElement item)
     {
         static string Text(JsonElement e, string key) => e.TryGetProperty(key, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString()! : "";
-        var titles = item.TryGetProperty("titles", out var ts) && ts.ValueKind == JsonValueKind.Array ? ts.EnumerateArray().Select(t => Text(t, "title")).Where(t => t.Length > 0).ToArray() : [];
+        var titles = new List<string>();
+        if (item.TryGetProperty("alternative_titles", out var alternatives) && alternatives.ValueKind == JsonValueKind.Object)
+        {
+            titles.Add(Text(alternatives, "en")); titles.Add(Text(alternatives, "ja"));
+            if (alternatives.TryGetProperty("synonyms", out var synonyms) && synonyms.ValueKind == JsonValueKind.Array)
+                titles.AddRange(synonyms.EnumerateArray().Where(s => s.ValueKind == JsonValueKind.String).Select(s => s.GetString()!));
+        }
         var genres = new List<string>();
-        foreach (var key in new[] { "genres", "themes", "demographics" })
+        foreach (var key in new[] { "genres" })
             if (item.TryGetProperty(key, out var gs) && gs.ValueKind == JsonValueKind.Array) genres.AddRange(gs.EnumerateArray().Select(g => Text(g, "name")));
         string? image = null;
-        if (item.TryGetProperty("images", out var images) && images.TryGetProperty("jpg", out var jpg)) image = Text(jpg, "large_image_url");
-        return new(item.GetProperty("mal_id").GetInt32(), Text(item, "title"), titles, Text(item, "synopsis"),
-            item.TryGetProperty("score", out var score) && score.ValueKind == JsonValueKind.Number && score.TryGetDouble(out var number) && number > 0 ? number : null,
-            genres.Distinct().ToArray(), Text(item, "status"), SafeImage(image) ? image : null);
+        if (item.TryGetProperty("main_picture", out var picture) && picture.ValueKind == JsonValueKind.Object)
+        { image = Text(picture, "large"); if (string.IsNullOrEmpty(image)) image = Text(picture, "medium"); }
+        return new(item.GetProperty("id").GetInt32(), Text(item, "title"), titles.Where(t => !string.IsNullOrWhiteSpace(t)).ToArray(), Text(item, "synopsis"),
+            item.TryGetProperty("mean", out var score) && score.ValueKind == JsonValueKind.Number && score.TryGetDouble(out var number) && number > 0 ? number : null,
+            genres.Distinct().ToArray(), Text(item, "status").Replace('_', ' '), SafeImage(image) ? image : null);
     }
     private async Task<MangaDetails[]> SearchCore(string title, CancellationToken ct)
     {
-        using var doc = await Fetch("manga?limit=15&q=" + Uri.EscapeDataString(title), ct);
-        return doc.RootElement.GetProperty("data").EnumerateArray().Select(Parse).ToArray();
+        using var doc = await Fetch("manga?limit=15&nsfw=true&fields=" + Fields + "&q=" + Uri.EscapeDataString(title), ct);
+        return doc.RootElement.GetProperty("data").EnumerateArray().Select(entry => Parse(entry.GetProperty("node"))).ToArray();
     }
     public static int? MangaId(string value)
     {
@@ -84,7 +102,7 @@ public sealed class MangaMetadata
         try
         {
             if (MangaId(title) is { } id)
-            { using var doc = await Fetch("manga/" + id, ct); return [Parse(doc.RootElement.GetProperty("data"))]; }
+            { using var doc = await Fetch("manga/" + id + "?fields=" + Fields, ct); return [Parse(doc.RootElement)]; }
             return await SearchCore(title, ct);
         }
         finally { gate.Release(); }
@@ -100,11 +118,11 @@ public sealed class MangaMetadata
             {
                 MangaDetails? details;
                 if (cached?.Details is { } previous)
-                { using var doc = await Fetch("manga/" + previous.Id, ct); details = Parse(doc.RootElement.GetProperty("data")); }
+                { using var doc = await Fetch("manga/" + previous.Id + "?fields=" + Fields, ct); details = Parse(doc.RootElement); }
                 else details = ExactMatch(title, await SearchCore(title, ct));
                 var value = new MangaMatch(DateTimeOffset.UtcNow, cached?.Pinned ?? false, details); Write(folder, value); return value;
             }
-            catch (Exception e) when (cached is not null && e is HttpRequestException or TaskCanceledException or JsonException)
+            catch (Exception e) when (cached is not null && e is HttpRequestException or TaskCanceledException or JsonException or MangaProviderException)
             { return cached; }
         }
         finally { gate.Release(); }
@@ -114,10 +132,16 @@ public sealed class MangaMetadata
         await gate.WaitAsync(ct);
         try
         {
-            using var doc = await Fetch("manga/" + id, ct);
-            var value = new MangaMatch(DateTimeOffset.UtcNow, true, Parse(doc.RootElement.GetProperty("data")));
+            using var doc = await Fetch("manga/" + id + "?fields=" + Fields, ct);
+            var value = new MangaMatch(DateTimeOffset.UtcNow, true, Parse(doc.RootElement));
             Write(folder, value); return value;
         }
+        finally { gate.Release(); }
+    }
+    public async Task TestConnection(string candidateClientId, CancellationToken ct)
+    {
+        await gate.WaitAsync(ct);
+        try { using var doc = await Fetch("manga/2?fields=id,title", ct, candidateClientId); doc.RootElement.GetProperty("id").GetInt32(); }
         finally { gate.Release(); }
     }
     public async Task<byte[]?> Cover(Guid folder, CancellationToken ct)

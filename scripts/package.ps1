@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory=$true)][ValidatePattern('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')][string]$Repository,
-    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.3.1',
+    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.4.0',
     [string]$Dotnet = 'dotnet'
 )
 $ErrorActionPreference = 'Stop'
@@ -19,7 +19,7 @@ $manifest = @(@{
     description='Read CBZ/ZIP manga with page turning and per-user progress saved on your Jellyfin server.';
     overview='Manga libraries and an in-app reader for Jellyfin Web and Android.';
     owner=$Repository.Split('/')[0]; category='General';
-    versions=@(@{ version="$Version.0"; changelog='MyAnimeList cover art, ratings, synopsis and genres via Jikan, with cached metadata and administrator identification.';
+    versions=@(@{ version="$Version.0"; changelog='Official MyAnimeList API with administrator Client ID settings, connection test, and direct metadata lookup.';
         targetAbi='12.1.0.0'; sourceUrl="https://github.com/$Repository/releases/download/v$Version/$zipName";
         checksum=$checksum; timestamp=[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ') })
 })
