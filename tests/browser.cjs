@@ -6,7 +6,8 @@ const http = require('node:http');
 
 (async () => {
  const web = path.resolve(__dirname, '../src/Web');
- let progress = null, revision = 0, failSave = false, conflict = false, registered = false, failRegistration = false, emptyLibrary = false, groupedFixture = false;
+ let progress = null, revision = 0, failSave = false, conflict = false, registered = false, failRegistration = false, emptyLibrary = false, groupedFixture = false, metadataFixture = false, identified = false, admin = true;
+ const mangaInfo = () => ({id:42,title:'The Paper Moon',score:8.25,synopsis:'An original test story about a paper moon.',genres:['Adventure'],status:'Publishing',image:'https://cdn.myanimelist.net/images/manga/test.jpg'});
  const server = http.createServer(async (req,res) => {
   const url = new URL(req.url, 'http://localhost');
   const send = (data, status=200) => { res.writeHead(status, {'Content-Type':'application/json'});res.end(JSON.stringify(data)); };
@@ -25,7 +26,11 @@ const http = require('node:http');
   if(relative.startsWith('MangaReader/libraries/')) { if(failRegistration)return send({},500);registered=true;return send({}); }
   // Match Jellyfin's omission of null properties on the last page.
   if(relative==='MangaReader/library' && groupedFixture) return send(url.searchParams.get('start') === '0' ? {next:100,items:[{id:'ten',title:'Chapter 10',series:'Folder title',seriesId:'one'},{id:'other',title:'Chapter 1',series:'Other manga',seriesId:'two'}]} : {items:[{id:'two',title:'Chapter 2',series:'Folder title',seriesId:'one'},{id:'duplicate',title:'Chapter 1',series:'Folder title',seriesId:'separate-folder'}]});
-  if(relative==='MangaReader/library') return send({items:emptyLibrary?[]:[{id:'book',title:'The Paper Moon — Volume 1',series:'The Paper Moon',seriesId:'folder-one',progress}]});
+  if(relative==='MangaReader/library') return send({canIdentify:admin,items:emptyLibrary?[]:[{id:'book',title:'The Paper Moon — Volume 1',series:'The Paper Moon',seriesId:'folder-one',progress}]});
+  if(relative.endsWith('/metadata')) return send({details:metadataFixture ? mangaInfo() : null});
+  if(relative.endsWith('/matches')) return send([mangaInfo()]);
+  if(relative.endsWith('/metadata/42')) {assert.equal(req.method,'PUT');identified=true;return send({details:mangaInfo()});}
+  if(relative.endsWith('/cover')) {res.writeHead(200,{'Content-Type':'image/svg+xml'});return res.end('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600"><rect width="400" height="600" fill="#365444"/><circle cx="200" cy="220" r="110" fill="#d0edaa"/><text x="55" y="410" fill="white" font-size="30">THE PAPER MOON</text></svg>');}
   if(relative==='MangaReader/books/book') return send({id:'book',title:'The Paper Moon — Volume 1',total:3,progress});
   if(relative.includes('/pages/')) {
    const number = Number(relative.split('/').pop());
@@ -47,7 +52,7 @@ const http = require('node:http');
   const page=await browser.newPage({viewport:{width:1280,height:900}});
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.goto(`http://127.0.0.1:${server.address().port}/jellyfin/MangaReader/reader`);
-  await page.locator('#username').fill('reader');await page.locator('#password').fill('test');await page.locator('button[type=submit]').click();
+  await page.locator('#username').fill('reader');await page.locator('#password').fill('test');await page.locator('#loginForm button[type=submit]').click();
   await page.locator('#books .book').waitFor();assert.equal(await page.locator('#more').isVisible(),false);
   await page.locator('#books .book').click();assert.equal(await page.locator('#libraryTitle').textContent(),'The Paper Moon');await page.locator('#books .book').click();await page.getByText('Place saved ✓',{exact:true}).waitFor();
   assert.equal(progress.Page,1);
@@ -113,7 +118,17 @@ const http = require('node:http');
   await page.locator('#search').fill('Other manga');assert.equal(await page.locator('#books .book').count(),1);
   await page.locator('#search').fill('');
   await page.screenshot({path:path.resolve(__dirname,'../test-results/folder-library.png'),fullPage:true});
-  groupedFixture=false;emptyLibrary=true;await page.reload();await page.locator('#empty').waitFor();
+  groupedFixture=false;metadataFixture=true;await page.reload();
+  await page.locator('#books .manga-cover').waitFor();await page.getByText('★ 8.25 / 10 · MAL',{exact:true}).waitFor();
+  await page.screenshot({path:path.resolve(__dirname,'../test-results/metadata-tiles-mobile.png'),fullPage:true});
+  await page.locator('#books .book').click();await page.getByText('An original test story about a paper moon.',{exact:true}).waitFor();
+  assert.equal(await page.locator('#malLink').getAttribute('href'),'https://myanimelist.net/manga/42');
+  await page.locator('#identify').click();await page.locator('#identifySearch').click();await page.locator('#identifyResults button').click();
+  await page.locator('#identifyPanel').waitFor({state:'hidden'});assert.equal(identified,true);
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  await page.screenshot({path:path.resolve(__dirname,'../test-results/metadata-details-mobile.png'),fullPage:true});
+  admin=false;await page.reload();await page.locator('#books .book').click();assert.equal(await page.locator('#identify').isVisible(),false);
+  emptyLibrary=true;await page.reload();await page.locator('#empty').waitFor();
   assert.equal(await page.locator('#more').isVisible(),false);assert.equal(await page.locator('#status').isVisible(),false);
   assert.deepEqual(errors,[]);
   console.log('PASS integration: ordinary Books unchanged, Manga preset/native folder arguments, library registration, same-window session handoff, resume, failed-save back guard, Android navigation hook, account logout, registration recovery warning');

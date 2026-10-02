@@ -57,7 +57,7 @@ dotnet run --project tests/CoreTests.csproj -c Release
 dotnet run --project middleware-tests/MiddlewareTests.csproj -c Release
 npm install
 npm test
-./scripts/package.ps1 -Repository 'CrawTek/jellyfin-plugin-manga-reader' -Version '0.2.4'
+./scripts/package.ps1 -Repository 'CrawTek/jellyfin-plugin-manga-reader' -Version '0.3.0'
 ```
 
 The core tests cover archive limits, ordering, progress persistence, user isolation and conflicts. Middleware tests use an actual local ASP.NET server with static files and compression. Browser tests use a mock Jellyfin API and a fixture of the library-creation interface; they check Manga registration, normal Books behavior, folder arguments, embedded login, resume, failed saves, Android navigation and logout. Set `BROWSER_CHANNEL=chrome` to use Chrome instead of Edge.
@@ -84,3 +84,13 @@ GNU GPL version 2. See [LICENSE](LICENSE).
 
 Manga titles are grouped by their parent folder name. Open a title to browse its chapters in natural numeric order, then return with All manga. Chapters from separate folders remain separate even when folder names match. Reading progress stays attached to each chapter.
 
+
+## MyAnimeList metadata
+
+The Manga Reader title shelf displays cover posters and MyAnimeList scores. Open a title for its synopsis, publication status, genres and chapters. Folder names remain the library titles. Metadata is obtained from the unofficial [Jikan API](https://docs.api.jikan.moe/); no API key or MyAnimeList login is required. This does not synchronize a MyAnimeList user's reading list.
+
+The server sends the manga folder name to Jikan when a visible title needs metadata. Only unique exact matches against primary or alternate titles are applied automatically. For a missing or incorrect match, an administrator can open the title, select **Identify manga**, search an English or Japanese name, and choose the correct entry. Other readers cannot change the shared match.
+
+Metadata is stored under Jellyfin's data directory in `manga-reader/metadata`, refreshed after seven days, and retained during provider outages. Unmatched searches are cached for one day. Requests are serialized and paced below Jikan's rate limits. Cover images are fetched by the server from MyAnimeList's HTTPS CDN and cached locally; image URLs never contain Jellyfin credentials. Library access is checked before serving metadata or covers. Manga reading remains available when the provider is offline.
+
+These cards and details appear in the plugin's in-app Web/Android reader. This release does not replace Jellyfin's native Books metadata providers or add manga support to Roku/Android TV.

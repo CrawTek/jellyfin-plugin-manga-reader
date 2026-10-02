@@ -36,6 +36,7 @@ public sealed class ServiceRegistrator : IPluginServiceRegistrator
     {
         services.AddSingleton<ProgressStore>();
         services.AddSingleton<ArchiveReader>();
+        services.AddSingleton<MangaMetadata>();
         services.AddTransient<IStartupFilter, ReaderStartupFilter>();
     }
 }

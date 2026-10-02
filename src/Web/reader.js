@@ -8,9 +8,59 @@ let auth;
 try { auth = embedded ? null : JSON.parse(sessionStorage.getItem(key) || 'null'); } catch { auth = null; }
 let library = [], cursor = 0, current = null, pageUrl = null, loading = false, selectedSeries = null;
 let saveChain = Promise.resolve(), unsaved = false, pendingSaves = 0;
+let canIdentify = false;
+const metadata = new Map(), covers = new Map(), metadataLoading = new Map();
+const coverObserver = new IntersectionObserver(entries => {
+    for (const entry of entries) if (entry.isIntersecting) {
+        coverObserver.unobserve(entry.target);
+        const book = library.find(b => b.id === entry.target.dataset.book);
+        if (book) loadMetadata(book).then(() => decorateSeries(entry.target, book));
+    }
+}, {rootMargin:'200px'});
+function detailsOf(value) {
+    const d = value?.Details ?? value?.details;
+    if (!d) return null;
+    return {id:d.Id ?? d.id, title:d.Title ?? d.title, synopsis:d.Synopsis ?? d.synopsis, score:d.Score ?? d.score,
+        genres:d.Genres ?? d.genres ?? [], status:d.Status ?? d.status, image:d.Image ?? d.image};
+}
+async function loadMetadata(book) {
+    const id = seriesKey(book);
+    if (metadata.has(id)) return;
+    if (metadataLoading.has(id)) return metadataLoading.get(id);
+    const session = auth;
+    const task = (async () => {
+        try {
+            const d = detailsOf(await json(`MangaReader/books/${book.id}/metadata`));
+            if (auth !== session) return;
+            metadata.set(id, d);
+            if (d?.image) {
+                try { const response = await request(`MangaReader/books/${book.id}/cover`); const blob = await response.blob(); if (auth === session) covers.set(id, URL.createObjectURL(blob)); } catch {}
+            }
+        } catch { if (auth === session) metadata.set(id, {unavailable:true}); }
+        finally { metadataLoading.delete(id); if (auth === session && selectedSeries === id) renderDetails(); }
+    })();
+    metadataLoading.set(id, task); return task;
+}
+function decorateSeries(button, book) {
+    const id = seriesKey(book), d = metadata.get(id);
+    button.querySelector('.manga-cover')?.remove(); button.querySelector('.manga-score')?.remove();
+    if (covers.has(id)) { const image = document.createElement('img'); image.className = 'manga-cover'; image.src = covers.get(id); image.alt = `${book.series} cover`; button.prepend(image); }
+    if (d?.score) { const score = document.createElement('span'); score.className = 'manga-score'; score.textContent = `★ ${d.score.toFixed(2)} / 10 · MAL`; button.append(score); }
+}
+function renderDetails() {
+    const book = library.find(b => seriesKey(b) === selectedSeries);
+    $('seriesDetails').hidden = !book; $('identify').hidden = !book || !canIdentify;
+    if (!book) return;
+    const d = metadata.get(selectedSeries);
+    $('seriesSynopsis').textContent = d?.synopsis || (d?.unavailable ? 'Metadata is temporarily unavailable. Your chapters are ready to read.' : metadata.has(selectedSeries) ? 'No unique MyAnimeList match found. An administrator can identify this manga.' : 'Loading MyAnimeList information…');
+    $('seriesFacts').textContent = d && !d.unavailable ? [d.score ? `★ ${d.score.toFixed(2)} / 10 · MyAnimeList` : '',d.status,...d.genres].filter(Boolean).join(' · ') : '';
+    $('seriesCover').hidden = !covers.has(selectedSeries);
+    if (covers.has(selectedSeries)) $('seriesCover').src = covers.get(selectedSeries);
+    $('malLink').hidden = !d?.id; if (d?.id) $('malLink').href = `https://myanimelist.net/manga/${d.id}`;
+}
 let device = localStorage.getItem('manga-reader-device');
 if (!device) { device = Array.from(crypto.getRandomValues(new Uint8Array(16)), v => v.toString(16).padStart(2,'0')).join(''); localStorage.setItem('manga-reader-device', device); }
-const authHeader = () => embedded ? 'MediaBrowser Token=' + JSON.stringify(auth?.token || '') : `MediaBrowser Client="Manga Reader", Device="Browser", DeviceId="${device}", Version="0.2.4"${auth ? `, Token="${auth.token}"` : ''}`;
+const authHeader = () => embedded ? 'MediaBrowser Token=' + JSON.stringify(auth?.token || '') : `MediaBrowser Client="Manga Reader", Device="Browser", DeviceId="${device}", Version="0.3.0"${auth ? `, Token="${auth.token}"` : ''}`;
 function message(text = '') { $('status').textContent = text; $('status').hidden = !text; }
 async function request(path, options = {}) {
     const response = await fetch(new URL(path, root), { ...options, headers: { Authorization: authHeader(), ...options.headers } });
@@ -38,10 +88,13 @@ function seriesCard(books) {
     const title = document.createElement('span'); title.className = 'book-title'; title.textContent = books[0].series || 'Manga';
     const info = document.createElement('span'); info.className = 'book-progress'; info.textContent = `${books.length} chapter${books.length === 1 ? '' : 's'} →`;
     button.append(title, info);
-    button.onclick = () => { selectedSeries = seriesKey(books[0]); $('search').value = ''; renderLibrary(); };
+    button.dataset.book = books[0].id;
+    decorateSeries(button, books[0]); coverObserver.observe(button);
+    button.onclick = () => { selectedSeries = seriesKey(books[0]); $('search').value = ''; renderLibrary(); loadMetadata(books[0]); };
     return button;
 }
 function renderLibrary() {
+    coverObserver.disconnect(); $('identifyPanel').hidden = true;
     const query = $('search').value.toLowerCase();
     const groups = new Map();
     for (const book of library) { const id = seriesKey(book); if (!groups.has(id)) groups.set(id, []); groups.get(id).push(book); }
@@ -57,6 +110,7 @@ function renderLibrary() {
     const recent = books.filter(b => b.progress).sort((a,b) => new Date(b.progress.UpdatedAt ?? b.progress.updatedAt) - new Date(a.progress.UpdatedAt ?? a.progress.updatedAt)).slice(0,6);
     $('continue').replaceChildren(...(inSeries ? recent.map(card) : [])); $('continueHeading').hidden = !inSeries || !recent.length;
     $('empty').hidden = (inSeries ? books : series).length > 0; $('more').hidden = cursor === null;
+    renderDetails();
 }
 async function loadLibrary(reset = false) {
     if (reset) { library = []; cursor = 0; selectedSeries = null; }
@@ -64,6 +118,7 @@ async function loadLibrary(reset = false) {
     try {
         do {
             const data = await json(`MangaReader/library?start=${cursor}&libraryId=${encodeURIComponent(libraryId)}`);
+            canIdentify = data.canIdentify === true;
             library.push(...data.items); cursor = data.next ?? null;
         } while (cursor !== null);
         renderLibrary();
@@ -127,6 +182,34 @@ $('logout').onclick = async () => { await saveChain; if (unsaved) { message('You
 $('back').onclick = () => back().catch(e => message(e.message));
 $('search').oninput = renderLibrary;
 $('seriesBack').onclick = () => { selectedSeries = null; $('search').value = ''; renderLibrary(); };
+$('identify').onclick = () => {
+    $('identifyPanel').hidden = false; $('identifyResults').replaceChildren();
+    $('identifyQuery').value = library.find(b => seriesKey(b) === selectedSeries)?.series || '';
+};
+$('identifyCancel').onclick = () => { $('identifyPanel').hidden = true; };
+$('identifyForm').onsubmit = async e => {
+    e.preventDefault(); const selected = selectedSeries, book = library.find(b => seriesKey(b) === selected);
+    if (!book) return;
+    const button = $('identifySearch'); button.disabled = true; $('identifyResults').textContent = 'Searching MyAnimeList…';
+    try {
+        const results = await json(`MangaReader/books/${book.id}/matches?query=${encodeURIComponent($('identifyQuery').value)}`);
+        if (selected !== selectedSeries) return;
+        $('identifyResults').replaceChildren(...results.map(raw => {
+            const d = detailsOf({details:raw}), choose = document.createElement('button'); choose.type = 'button';
+            choose.textContent = `${d.title} · MAL #${d.id}${d.score ? ' · ★ ' + d.score : ''}`;
+            choose.onclick = async () => {
+                choose.disabled = true;
+                try {
+                    const value = await json(`MangaReader/books/${book.id}/metadata/${d.id}`, {method:'PUT'});
+                    const old = covers.get(selected); if (old) URL.revokeObjectURL(old); covers.delete(selected);
+                    metadata.delete(selected); await loadMetadata(book);
+                    if (selected === selectedSeries) { $('identifyPanel').hidden = true; renderDetails(); }
+                } catch(e) { message(e.message); } finally { choose.disabled = false; }
+            }; return choose;
+        }));
+        if (!results.length) $('identifyResults').textContent = 'No matches. Try the English or Japanese title.';
+    } catch(e) { $('identifyResults').textContent = e.message; } finally { button.disabled = false; }
+};
 $('more').onclick = () => loadLibrary().catch(e => message(e.message));
 $('previous').onclick = () => showPage(current.page - 1);
 $('next').onclick = () => showPage(current.page + 1);

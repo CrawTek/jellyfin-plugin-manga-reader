@@ -1,3 +1,4 @@
+using System.Text.Json;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using Microsoft.AspNetCore.Authorization;
@@ -8,7 +9,7 @@ namespace Jellyfin.Plugin.MangaReader;
 [ApiController]
 [Authorize]
 [Route("MangaReader")]
-public sealed class ReaderController(ILibraryManager library, IUserManager users, ProgressStore progress, ArchiveReader archives) : ControllerBase
+public sealed class ReaderController(ILibraryManager library, IUserManager users, ProgressStore progress, ArchiveReader archives, MangaMetadata metadata) : ControllerBase
 {
     private Guid UserId => Guid.TryParse(User.FindFirst("Jellyfin-UserId")?.Value, out var id) ? id : Guid.Empty;
     private static readonly object ConfigurationLock = new();
@@ -57,6 +58,7 @@ public sealed class ReaderController(ILibraryManager library, IUserManager users
         });
         return Ok(new
         {
+            canIdentify = User.IsInRole("Administrator"),
             next = items.Count == 100 ? (int?)(start + 100) : null,
             items = items.OfType<Book>().Where(b => b.IsVisible(user) && ArchiveReader.Supports(b.Path))
                 .Select(b => new { id = b.Id, title = b.Name, seriesId = b.ParentId, series = Path.GetFileName(Path.GetDirectoryName(b.Path)), progress = progress.Get(UserId, b.Id) }).ToArray()
@@ -69,6 +71,47 @@ public sealed class ReaderController(ILibraryManager library, IUserManager users
         if (user is null) return null;
         var item = library.GetItemById<Book>(id, user);
         return item is not null && item.IsVisible(user) && ArchiveReader.Supports(item.Path) ? item : null;
+    }
+
+    [HttpGet("books/{id:guid}/metadata")]
+    public async Task<IActionResult> Metadata(Guid id, CancellationToken ct)
+    {
+        var book = AccessibleBook(id); if (book is null) return NotFound();
+        try { return Ok(await metadata.Get(book.ParentId, Path.GetFileName(Path.GetDirectoryName(book.Path)) ?? book.Name, ct)); }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException or JsonException)
+        { return Problem("MyAnimeList metadata is temporarily unavailable. You can still read your manga.", statusCode: 503); }
+    }
+    [Authorize(Policy = MediaBrowser.Common.Api.Policies.RequiresElevation)]
+    [HttpGet("books/{id:guid}/matches")]
+    public async Task<IActionResult> Matches(Guid id, [FromQuery] string query, CancellationToken ct)
+    {
+        if (AccessibleBook(id) is null) return NotFound();
+        if (string.IsNullOrWhiteSpace(query) || query.Length > 120) return BadRequest();
+        try { return Ok(await metadata.Search(query, ct)); }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException)
+        { return Problem("Search is temporarily unavailable. Try again shortly.", statusCode: 503); }
+    }
+    [Authorize(Policy = MediaBrowser.Common.Api.Policies.RequiresElevation)]
+    [HttpPut("books/{id:guid}/metadata/{malId:int}")]
+    public async Task<IActionResult> Identify(Guid id, int malId, CancellationToken ct)
+    {
+        var book = AccessibleBook(id); if (book is null) return NotFound();
+        if (malId < 1) return BadRequest();
+        try { return Ok(await metadata.Identify(book.ParentId, malId, ct)); }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException or JsonException)
+        { return Problem("Could not save this manga match. Try again shortly.", statusCode: 503); }
+    }
+    [HttpGet("books/{id:guid}/cover")]
+    public async Task<IActionResult> Cover(Guid id, CancellationToken ct)
+    {
+        var book = AccessibleBook(id); if (book is null) return NotFound();
+        try
+        {
+            var bytes = await metadata.Cover(book.ParentId, ct); if (bytes is null) return NotFound();
+            Response.Headers["Cache-Control"] = "private, no-store"; return File(bytes, "image/jpeg");
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException)
+        { return NotFound(); }
     }
 
     [AllowAnonymous]

@@ -48,7 +48,7 @@ public sealed class ReaderShellMiddleware(RequestDelegate next)
             {
                 var html = Encoding.UTF8.GetString(buffer.ToArray());
                 var basePath = context.Request.PathBase.Value + path[..webIndex];
-                var source = HtmlEncoder.Default.Encode(basePath + "/MangaReader/assets/bridge.js?v=0.2.4");
+                var source = HtmlEncoder.Default.Encode(basePath + "/MangaReader/assets/bridge.js?v=0.3.0");
                 var script = "<script defer src=\"" + source + "\"></script>";
                 var end = html.LastIndexOf("</body>", StringComparison.OrdinalIgnoreCase);
                 html = end >= 0 ? html.Insert(end, script) : html + script;
