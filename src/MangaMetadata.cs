@@ -66,9 +66,28 @@ public sealed class MangaMetadata
         using var doc = await Fetch("manga?limit=15&q=" + Uri.EscapeDataString(title), ct);
         return doc.RootElement.GetProperty("data").EnumerateArray().Select(Parse).ToArray();
     }
+    public static int? MangaId(string value)
+    {
+        value = value.Trim();
+        if (int.TryParse(value, out var id) && id > 0) return id;
+        if (Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme == "https" &&
+            uri.Host is "myanimelist.net" or "www.myanimelist.net" && uri.IsDefaultPort && string.IsNullOrEmpty(uri.UserInfo))
+        {
+            var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length >= 2 && segments[0] == "manga" && int.TryParse(segments[1], out id) && id > 0) return id;
+        }
+        return null;
+    }
     public async Task<MangaDetails[]> Search(string title, CancellationToken ct)
     {
-        await gate.WaitAsync(ct); try { return await SearchCore(title, ct); } finally { gate.Release(); }
+        await gate.WaitAsync(ct);
+        try
+        {
+            if (MangaId(title) is { } id)
+            { using var doc = await Fetch("manga/" + id, ct); return [Parse(doc.RootElement.GetProperty("data"))]; }
+            return await SearchCore(title, ct);
+        }
+        finally { gate.Release(); }
     }
     public async Task<MangaMatch> Get(Guid folder, string title, CancellationToken ct)
     {

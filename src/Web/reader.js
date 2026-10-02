@@ -60,13 +60,17 @@ function renderDetails() {
 }
 let device = localStorage.getItem('manga-reader-device');
 if (!device) { device = Array.from(crypto.getRandomValues(new Uint8Array(16)), v => v.toString(16).padStart(2,'0')).join(''); localStorage.setItem('manga-reader-device', device); }
-const authHeader = () => embedded ? 'MediaBrowser Token=' + JSON.stringify(auth?.token || '') : `MediaBrowser Client="Manga Reader", Device="Browser", DeviceId="${device}", Version="0.3.0"${auth ? `, Token="${auth.token}"` : ''}`;
+const authHeader = () => embedded ? 'MediaBrowser Token=' + JSON.stringify(auth?.token || '') : `MediaBrowser Client="Manga Reader", Device="Browser", DeviceId="${device}", Version="0.3.1"${auth ? `, Token="${auth.token}"` : ''}`;
 function message(text = '') { $('status').textContent = text; $('status').hidden = !text; }
 async function request(path, options = {}) {
     const response = await fetch(new URL(path, root), { ...options, headers: { Authorization: authHeader(), ...options.headers } });
     if (!response.ok) {
         if (response.status === 401) throw new Error('Sign-in expired or incorrect. Sign out and sign in again.');
         if (response.status === 409) { const error = new Error('Your place changed in another reader. Return to the library and reopen this book.'); error.conflict = true; throw error; }
+        if (response.status === 503) {
+            let problem; try { problem = await response.json(); } catch {}
+            throw new Error(problem?.detail || problem?.Detail || 'The metadata service is temporarily unavailable. Try again later; you can still read your manga.');
+        }
         throw new Error(`Request failed (${response.status}). Check your connection, library access, or the server log.`);
     }
     return response;

@@ -57,7 +57,7 @@ dotnet run --project tests/CoreTests.csproj -c Release
 dotnet run --project middleware-tests/MiddlewareTests.csproj -c Release
 npm install
 npm test
-./scripts/package.ps1 -Repository 'CrawTek/jellyfin-plugin-manga-reader' -Version '0.3.0'
+./scripts/package.ps1 -Repository 'CrawTek/jellyfin-plugin-manga-reader' -Version '0.3.1'
 ```
 
 The core tests cover archive limits, ordering, progress persistence, user isolation and conflicts. Middleware tests use an actual local ASP.NET server with static files and compression. Browser tests use a mock Jellyfin API and a fixture of the library-creation interface; they check Manga registration, normal Books behavior, folder arguments, embedded login, resume, failed saves, Android navigation and logout. Set `BROWSER_CHANNEL=chrome` to use Chrome instead of Edge.
@@ -94,3 +94,5 @@ The server sends the manga folder name to Jikan when a visible title needs metad
 Metadata is stored under Jellyfin's data directory in `manga-reader/metadata`, refreshed after seven days, and retained during provider outages. Unmatched searches are cached for one day. Requests are serialized and paced below Jikan's rate limits. Cover images are fetched by the server from MyAnimeList's HTTPS CDN and cached locally; image URLs never contain Jellyfin credentials. Library access is checked before serving metadata or covers. Manga reading remains available when the provider is offline.
 
 These cards and details appear in the plugin's in-app Web/Android reader. This release does not replace Jellyfin's native Books metadata providers or add manga support to Roku/Android TV.
+
+Identify manga also accepts a MyAnimeList manga URL or numeric manga ID. This bypasses title search, but still depends on Jikan being able to return that individual entry. Provider outages are explained in the reader instead of showing a generic HTTP 503.

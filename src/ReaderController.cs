@@ -86,10 +86,10 @@ public sealed class ReaderController(ILibraryManager library, IUserManager users
     public async Task<IActionResult> Matches(Guid id, [FromQuery] string query, CancellationToken ct)
     {
         if (AccessibleBook(id) is null) return NotFound();
-        if (string.IsNullOrWhiteSpace(query) || query.Length > 120) return BadRequest();
+        if (string.IsNullOrWhiteSpace(query) || query.Length > 500) return BadRequest();
         try { return Ok(await metadata.Search(query, ct)); }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException)
-        { return Problem("Search is temporarily unavailable. Try again shortly.", statusCode: 503); }
+        { return Problem("The MyAnimeList lookup service (Jikan) is temporarily unavailable. Try a MyAnimeList manga link or numeric ID instead of a title, or try again later. Your manga files and reading progress are unaffected.", statusCode: 503); }
     }
     [Authorize(Policy = MediaBrowser.Common.Api.Policies.RequiresElevation)]
     [HttpPut("books/{id:guid}/metadata/{malId:int}")]

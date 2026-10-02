@@ -53,6 +53,9 @@ try
     Check((await meta.Get(a, "The Paper Moon", default)).Details?.Id == 1, "Fetch and cache matched manga");
     Check((await new MangaMetadata(metaRoot, client).Get(a, "The Paper Moon", default)).Details?.Id == 1 && handler.Calls == 1, "Metadata survives restart without another request");
     Check((await meta.Identify(b, 1, default)).Pinned, "Administrator identification persists selected match");
+    Check(MangaMetadata.MangaId("https://myanimelist.net/manga/2/Berserk") == 2 && MangaMetadata.MangaId("2") == 2, "Accept MAL manga URL or ID");
+    Check(MangaMetadata.MangaId("https://evil.test/manga/2") is null && MangaMetadata.MangaId("https://myanimelist.net/anime/2") is null && MangaMetadata.MangaId("0") is null, "Reject non-manga links and invalid IDs");
+    Check((await meta.Search("https://myanimelist.net/manga/1/Paper_Moon", default)).Single().Id == 1 && handler.LastPath == "/v4/manga/1", "ID lookup bypasses title search");
     handler.Fail = true;
     var cacheFile = Path.Combine(metaRoot, a.ToString("N") + ".json");
     File.WriteAllText(cacheFile, System.Text.Json.JsonSerializer.Serialize(new MangaMatch(DateTimeOffset.UtcNow.AddDays(-8), false, details)));
@@ -68,9 +71,11 @@ sealed class MetadataHandler(string item) : HttpMessageHandler
 {
     public int Calls;
     public bool Fail;
+    public string? LastPath;
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         Calls++;
+        LastPath = request.RequestUri!.AbsolutePath;
         return Task.FromResult(new HttpResponseMessage(Fail ? System.Net.HttpStatusCode.ServiceUnavailable : System.Net.HttpStatusCode.OK)
         { Content = new StringContent("{\"data\":" + (request.RequestUri!.Query.Length > 0 ? "[" + item + "]" : item) + "}") });
     }
