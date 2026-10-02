@@ -59,7 +59,7 @@ public sealed class ReaderController(ILibraryManager library, IUserManager users
         {
             next = items.Count == 100 ? (int?)(start + 100) : null,
             items = items.OfType<Book>().Where(b => b.IsVisible(user) && ArchiveReader.Supports(b.Path))
-                .Select(b => new { id = b.Id, title = b.Name, series = string.IsNullOrWhiteSpace(b.SeriesName) ? Path.GetFileName(Path.GetDirectoryName(b.Path)) : b.SeriesName, progress = progress.Get(UserId, b.Id) }).ToArray()
+                .Select(b => new { id = b.Id, title = b.Name, seriesId = b.ParentId, series = Path.GetFileName(Path.GetDirectoryName(b.Path)), progress = progress.Get(UserId, b.Id) }).ToArray()
         });
     }
     private Book? AccessibleBook(Guid id)

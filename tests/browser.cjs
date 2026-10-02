@@ -6,7 +6,7 @@ const http = require('node:http');
 
 (async () => {
  const web = path.resolve(__dirname, '../src/Web');
- let progress = null, revision = 0, failSave = false, conflict = false, registered = false, failRegistration = false, emptyLibrary = false;
+ let progress = null, revision = 0, failSave = false, conflict = false, registered = false, failRegistration = false, emptyLibrary = false, groupedFixture = false;
  const server = http.createServer(async (req,res) => {
   const url = new URL(req.url, 'http://localhost');
   const send = (data, status=200) => { res.writeHead(status, {'Content-Type':'application/json'});res.end(JSON.stringify(data)); };
@@ -24,7 +24,8 @@ const http = require('node:http');
   if(relative==='MangaReader/bootstrap') return send({enabled:true,libraries:registered?[{id:'11111111111111111111111111111111',name:'My Manga'}]:[]});
   if(relative.startsWith('MangaReader/libraries/')) { if(failRegistration)return send({},500);registered=true;return send({}); }
   // Match Jellyfin's omission of null properties on the last page.
-  if(relative==='MangaReader/library') return send({items:emptyLibrary?[]:[{id:'book',title:'The Paper Moon — Volume 1',progress}]});
+  if(relative==='MangaReader/library' && groupedFixture) return send(url.searchParams.get('start') === '0' ? {next:100,items:[{id:'ten',title:'Chapter 10',series:'Folder title',seriesId:'one'},{id:'other',title:'Chapter 1',series:'Other manga',seriesId:'two'}]} : {items:[{id:'two',title:'Chapter 2',series:'Folder title',seriesId:'one'},{id:'duplicate',title:'Chapter 1',series:'Folder title',seriesId:'separate-folder'}]});
+  if(relative==='MangaReader/library') return send({items:emptyLibrary?[]:[{id:'book',title:'The Paper Moon — Volume 1',series:'The Paper Moon',seriesId:'folder-one',progress}]});
   if(relative==='MangaReader/books/book') return send({id:'book',title:'The Paper Moon — Volume 1',total:3,progress});
   if(relative.includes('/pages/')) {
    const number = Number(relative.split('/').pop());
@@ -48,11 +49,11 @@ const http = require('node:http');
   await page.goto(`http://127.0.0.1:${server.address().port}/jellyfin/MangaReader/reader`);
   await page.locator('#username').fill('reader');await page.locator('#password').fill('test');await page.locator('button[type=submit]').click();
   await page.locator('#books .book').waitFor();assert.equal(await page.locator('#more').isVisible(),false);
-  await page.locator('#books .book').click();await page.getByText('Place saved ✓',{exact:true}).waitFor();
+  await page.locator('#books .book').click();assert.equal(await page.locator('#libraryTitle').textContent(),'The Paper Moon');await page.locator('#books .book').click();await page.getByText('Place saved ✓',{exact:true}).waitFor();
   assert.equal(progress.Page,1);
   await page.locator('#stage').focus();await page.keyboard.press('ArrowLeft');await page.waitForFunction(()=>document.querySelector('#pageNumber').value==='2' && document.querySelector('#saved').textContent==='Place saved ✓');
   assert.equal(progress.Page,2);assert.equal(progress.Direction,'rtl');
-  await page.reload();await page.locator('#continue .book').click();await page.getByText('Place saved ✓',{exact:true}).waitFor();assert.equal(await page.locator('#pageNumber').inputValue(),'2');
+  await page.reload();await page.locator('#books .book').click();await page.locator('#continue .book').click();await page.getByText('Place saved ✓',{exact:true}).waitFor();assert.equal(await page.locator('#pageNumber').inputValue(),'2');
   await page.locator('#direction').selectOption('ltr');await page.getByText('Place saved ✓',{exact:true}).waitFor();
   await page.locator('#stage').focus();await page.keyboard.press('ArrowRight');await page.waitForFunction(()=>document.querySelector('#pageNumber').value==='3' && document.querySelector('#saved').textContent==='Place saved ✓');
   assert.equal(progress.Page,3);assert.equal(await page.locator('#next').isDisabled(),true);
@@ -81,7 +82,7 @@ const http = require('node:http');
   assert.equal(created.type,'books');assert.equal(created.name,'My Manga');assert.deepEqual(created.options.PathInfos,[{Path:'/media/manga'}]);
   await shell.locator('#mangaTile').click();
   const reader=shell.frameLocator('#manga-reader-overlay iframe');
-  await reader.locator('#books .book').click();await reader.getByText('Place saved ✓',{exact:true}).waitFor();
+  await reader.locator('#books .book').click();await reader.locator('#books .book').click();await reader.getByText('Place saved ✓',{exact:true}).waitFor();
   assert.equal(await reader.locator('#pageNumber').inputValue(),'2');
   assert.equal(await reader.locator('#logout').isVisible(),false);
   assert.equal(await reader.locator('#login').isVisible(),false);
@@ -94,7 +95,7 @@ const http = require('node:http');
   await shell.screenshot({path:path.resolve(__dirname,'../test-results/in-app-reader-mobile.png'),fullPage:true});
   await shell.evaluate(()=>NavigationHelper.goBack());await shell.locator('#manga-reader-overlay').waitFor({state:'detached'});
   assert.equal(await shell.evaluate(()=>window.nativeBackCount),0);
-  await shell.locator('#mangaTile').click();await reader.locator('#continue .book').click();await reader.getByText('Place saved ✓',{exact:true}).waitFor();
+  await shell.locator('#mangaTile').click();await reader.locator('#books .book').click();await reader.locator('#continue .book').click();await reader.getByText('Place saved ✓',{exact:true}).waitFor();
   assert.equal(await reader.locator('#pageNumber').inputValue(),'3');
   await shell.evaluate(()=>window.testToken='');await shell.locator('#manga-reader-overlay').waitFor({state:'detached'});
   await shell.evaluate(()=>window.testToken='test-token');
@@ -103,7 +104,16 @@ const http = require('node:http');
   const dialog=shell.waitForEvent('dialog');await shell.locator('button[type=submit]').click();
   const warning=await dialog;assert.match(warning.message(),/library was created.*Do not create it again/);await warning.accept();
   await shell.waitForFunction(()=>document.body.dataset.created==='3');
-  emptyLibrary=true;await page.reload();await page.locator('#empty').waitFor();
+  groupedFixture=true;await page.reload();await page.getByRole('button',{name:'Folder title 2 chapters →',exact:true}).waitFor();
+  assert.equal(await page.locator('#books .book').count(),3);
+  assert.equal(await page.locator('#continue .book').count(),0);
+  await page.getByRole('button',{name:'Folder title 2 chapters →',exact:true}).click();
+  assert.deepEqual(await page.locator('#books .book-title').allTextContents(),['Chapter 2','Chapter 10']);
+  await page.locator('#seriesBack').click();assert.equal(await page.locator('#books .book').count(),3);
+  await page.locator('#search').fill('Other manga');assert.equal(await page.locator('#books .book').count(),1);
+  await page.locator('#search').fill('');
+  await page.screenshot({path:path.resolve(__dirname,'../test-results/folder-library.png'),fullPage:true});
+  groupedFixture=false;emptyLibrary=true;await page.reload();await page.locator('#empty').waitFor();
   assert.equal(await page.locator('#more').isVisible(),false);assert.equal(await page.locator('#status').isVisible(),false);
   assert.deepEqual(errors,[]);
   console.log('PASS integration: ordinary Books unchanged, Manga preset/native folder arguments, library registration, same-window session handoff, resume, failed-save back guard, Android navigation hook, account logout, registration recovery warning');

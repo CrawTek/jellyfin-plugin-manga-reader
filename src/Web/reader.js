@@ -6,11 +6,11 @@ const embedded = new URLSearchParams(location.search).get('embedded') === '1' &&
 const libraryId = new URLSearchParams(location.search).get('libraryId') || '';
 let auth;
 try { auth = embedded ? null : JSON.parse(sessionStorage.getItem(key) || 'null'); } catch { auth = null; }
-let library = [], cursor = 0, current = null, pageUrl = null, loading = false;
+let library = [], cursor = 0, current = null, pageUrl = null, loading = false, selectedSeries = null;
 let saveChain = Promise.resolve(), unsaved = false, pendingSaves = 0;
 let device = localStorage.getItem('manga-reader-device');
 if (!device) { device = Array.from(crypto.getRandomValues(new Uint8Array(16)), v => v.toString(16).padStart(2,'0')).join(''); localStorage.setItem('manga-reader-device', device); }
-const authHeader = () => embedded ? 'MediaBrowser Token=' + JSON.stringify(auth?.token || '') : `MediaBrowser Client="Manga Reader", Device="Browser", DeviceId="${device}", Version="0.2.3"${auth ? `, Token="${auth.token}"` : ''}`;
+const authHeader = () => embedded ? 'MediaBrowser Token=' + JSON.stringify(auth?.token || '') : `MediaBrowser Client="Manga Reader", Device="Browser", DeviceId="${device}", Version="0.2.4"${auth ? `, Token="${auth.token}"` : ''}`;
 function message(text = '') { $('status').textContent = text; $('status').hidden = !text; }
 async function request(path, options = {}) {
     const response = await fetch(new URL(path, root), { ...options, headers: { Authorization: authHeader(), ...options.headers } });
@@ -32,22 +32,40 @@ function card(book) {
     button.append(icon, title, info); button.onclick = () => openBook(book.id).catch(e => message(e.message));
     return button;
 }
+function seriesKey(book) { return book.seriesId || book.series || 'unfiled'; }
+function seriesCard(books) {
+    const button = document.createElement('button'); button.className = 'book';
+    const title = document.createElement('span'); title.className = 'book-title'; title.textContent = books[0].series || 'Manga';
+    const info = document.createElement('span'); info.className = 'book-progress'; info.textContent = `${books.length} chapter${books.length === 1 ? '' : 's'} →`;
+    button.append(title, info);
+    button.onclick = () => { selectedSeries = seriesKey(books[0]); $('search').value = ''; renderLibrary(); };
+    return button;
+}
 function renderLibrary() {
     const query = $('search').value.toLowerCase();
-    const books = library.filter(b => b.title.toLowerCase().includes(query));
-    $('books').replaceChildren(...books.sort((a,b) => a.title.localeCompare(b.title, undefined, {numeric:true})).map(card));
+    const groups = new Map();
+    for (const book of library) { const id = seriesKey(book); if (!groups.has(id)) groups.set(id, []); groups.get(id).push(book); }
+    const inSeries = selectedSeries !== null;
+    const books = (inSeries ? groups.get(selectedSeries) || [] : library).filter(b => b.title.toLowerCase().includes(query));
+    const series = [...groups.values()].filter(group => (group[0].series || 'Manga').toLowerCase().includes(query)).sort((a,b) => (a[0].series || '').localeCompare(b[0].series || '', undefined, {numeric:true}));
+    $('books').replaceChildren(...(inSeries ? books.sort((a,b) => a.title.localeCompare(b.title, undefined, {numeric:true})).map(card) : series.map(seriesCard)));
+    $('libraryTitle').textContent = inSeries ? groups.get(selectedSeries)?.[0]?.series || 'Manga' : 'Your manga.';
+    $('shelfHeading').textContent = inSeries ? 'Chapters' : 'On your shelf';
+    $('seriesBack').hidden = !inSeries;
+    $('search').placeholder = inSeries ? 'Search chapters…' : 'Search manga titles…';
+    $('back').textContent = '← Chapters';
     const recent = books.filter(b => b.progress).sort((a,b) => new Date(b.progress.UpdatedAt ?? b.progress.updatedAt) - new Date(a.progress.UpdatedAt ?? a.progress.updatedAt)).slice(0,6);
-    $('continue').replaceChildren(...recent.map(card)); $('continueHeading').hidden = !recent.length;
-    $('empty').hidden = books.length > 0; $('more').hidden = cursor === null;
+    $('continue').replaceChildren(...(inSeries ? recent.map(card) : [])); $('continueHeading').hidden = !inSeries || !recent.length;
+    $('empty').hidden = (inSeries ? books : series).length > 0; $('more').hidden = cursor === null;
 }
 async function loadLibrary(reset = false) {
-    if (reset) { library = []; cursor = 0; }
+    if (reset) { library = []; cursor = 0; selectedSeries = null; }
     $('more').disabled = true;
     try {
         do {
             const data = await json(`MangaReader/library?start=${cursor}&libraryId=${encodeURIComponent(libraryId)}`);
             library.push(...data.items); cursor = data.next ?? null;
-        } while (cursor !== null && library.length === 0);
+        } while (cursor !== null);
         renderLibrary();
     } finally { $('more').disabled = false; }
 }
@@ -108,6 +126,7 @@ $('loginForm').onsubmit = async e => {
 $('logout').onclick = async () => { await saveChain; if (unsaved) { message('Your place is not saved. Retry saving before signing out.'); return; } try { await request('Sessions/Logout', {method:'POST'}); } catch {} auth = null; current = null; library = []; sessionStorage.removeItem(key); view('login'); };
 $('back').onclick = () => back().catch(e => message(e.message));
 $('search').oninput = renderLibrary;
+$('seriesBack').onclick = () => { selectedSeries = null; $('search').value = ''; renderLibrary(); };
 $('more').onclick = () => loadLibrary().catch(e => message(e.message));
 $('previous').onclick = () => showPage(current.page - 1);
 $('next').onclick = () => showPage(current.page + 1);
